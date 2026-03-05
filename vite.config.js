@@ -8,6 +8,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
+  // Force Vite/esbuild to pre-bundle libflac.js (UMD/CJS) as ESM so that the
+  // asm.js runtime works correctly in the browser without any dynamic require().
+  optimizeDeps: {
+    include: ['libflacjs/dist/libflac.js'],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
