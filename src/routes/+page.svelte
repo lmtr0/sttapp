@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
+  import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   // libflac.js is a self-contained UMD/asm.js module — import it directly to
   // avoid Vite choking on the CJS require() calls inside the lib/ utilities.
   // @ts-ignore
@@ -9,6 +11,7 @@
   // ── Types ──────────────────────────────────────────────────────────────────
 
   type AppState = 'idle' | 'requesting-mic' | 'recording' | 'transcribing' | 'done' | 'error';
+  type PasteMode = 'normal' | 'plain';
 
   interface Config {
     apiKey: string;
@@ -39,6 +42,17 @@
 
   onMount(async () => {
     config = await invoke<Config>('get_config');
+
+    // Listen for F8 global shortcut emitted from Rust.
+    await listen<{ pasteMode?: PasteMode }>('shortcut-pressed', (event) => {
+      const pasteMode: PasteMode = event.payload?.pasteMode ?? 'normal';
+      if (appState === 'recording') {
+        stopAndTranscribe(pasteMode);
+      } else if (appState === 'done' || appState === 'error') {
+        recordAgain();
+      }
+    });
+
     await startRecording();
   });
 
@@ -79,7 +93,7 @@
 
   // ── Transcription ──────────────────────────────────────────────────────────
 
-  async function stopAndTranscribe() {
+  async function stopAndTranscribe(pasteMode: PasteMode = 'normal') {
     if (appState !== 'recording') return;
     appState = 'transcribing';
 
@@ -177,6 +191,12 @@
       // OpenAI and Groq both return { text: "..." }
       transcript = json.text ?? json.transcript ?? JSON.stringify(json);
 
+      // Copy transcript to clipboard.
+      await writeText(transcript);
+
+      // Paste transcript into the current active app window.
+      await invoke('paste_active_window', { mode: pasteMode });
+
       // Print to the terminal where the app was launched from.
       await invoke('print_to_stdout', { text: transcript });
 
@@ -203,8 +223,6 @@
 </script>
 
 <main>
-  <h1>STT</h1>
-
   {#if appState === 'idle'}
     <p class="status">Initialising…</p>
 
@@ -214,55 +232,72 @@
   {:else if appState === 'recording'}
     <div class="indicator">
       <span class="dot"></span>
-      Recording — {formatTime(elapsedSeconds)}
+      <span class="time">{formatTime(elapsedSeconds)}</span>
     </div>
-    <button onclick={stopAndTranscribe}>Transcribe</button>
+    <button onclick={() => stopAndTranscribe('normal')}>Transcribe <kbd>F8</kbd></button>
 
   {:else if appState === 'transcribing'}
     <p class="status">Transcribing…</p>
 
   {:else if appState === 'done'}
-    <div class="transcript">{transcript}</div>
-    <button onclick={recordAgain}>Record again</button>
+    <div class="copied">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M2.5 8.5L6.5 12.5L13.5 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Copied to clipboard
+    </div>
+    <button onclick={recordAgain}>Again <kbd>F8</kbd></button>
 
   {:else if appState === 'error'}
     <p class="error">{errorMsg}</p>
-    <button onclick={recordAgain}>Try again</button>
+    <button onclick={recordAgain}>Retry <kbd>F8</kbd></button>
   {/if}
 </main>
 
 <style>
   :root {
-    font-family: Inter, system-ui, sans-serif;
-    font-size: 15px;
-    line-height: 1.5;
-    background: #0d0d0d;
-    color: #e8e8e8;
+    font-family: 'SF Mono', 'Geist Mono', 'Fira Code', ui-monospace, monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #e2e2e2;
+  }
+
+  :global(html),
+  :global(body) {
+    background: transparent !important;
+    margin: 0;
+    padding: 0;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
 
   main {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
-    gap: 1.5rem;
-    padding: 2rem;
-    box-sizing: border-box;
-  }
-
-  h1 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: #555;
-    margin: 0;
+    gap: 1.25rem;
+    width: 400px;
+    height: 120px;
+    padding: 0 1.5rem;
+    background: #111111;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.6),
+      0 2px 8px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    overflow: hidden;
   }
 
   .status {
     color: #555;
-    margin: 0;
+    font-size: 0.85rem;
+    letter-spacing: 0.03em;
   }
 
   /* Recording indicator */
@@ -270,65 +305,85 @@
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    font-variant-numeric: tabular-nums;
-    font-size: 1rem;
-    color: #e8e8e8;
   }
 
   .dot {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: #e03c3c;
     animation: pulse 1.2s ease-in-out infinite;
     flex-shrink: 0;
   }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.25; }
+  .time {
+    font-variant-numeric: tabular-nums;
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #e2e2e2;
+    letter-spacing: 0.05em;
   }
 
-  /* Transcript output */
-  .transcript {
-    max-width: 560px;
-    width: 100%;
-    background: #1a1a1a;
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 1rem 1.2rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 0.95rem;
-    line-height: 1.6;
-    color: #d4d4d4;
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(224, 60, 60, 0.4); }
+    50%       { opacity: 0.5; box-shadow: 0 0 0 4px rgba(224, 60, 60, 0); }
+  }
+
+  /* Copied confirmation */
+  .copied {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #4ade80;
+    font-size: 0.85rem;
+    letter-spacing: 0.03em;
   }
 
   .error {
-    color: #e05252;
-    max-width: 480px;
-    text-align: center;
-    font-size: 0.875rem;
-    margin: 0;
+    color: #f87171;
+    font-size: 0.78rem;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   button {
-    padding: 0.55rem 1.4rem;
-    border: 1px solid #333;
-    border-radius: 6px;
-    background: #1a1a1a;
-    color: #e8e8e8;
-    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #c0c0c0;
+    font-family: inherit;
+    font-size: 0.82rem;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    white-space: nowrap;
   }
 
   button:hover {
-    background: #242424;
-    border-color: #444;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.18);
+    color: #e2e2e2;
   }
 
   button:active {
-    background: #2e2e2e;
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  kbd {
+    display: inline-block;
+    padding: 0.1rem 0.3rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    font-family: inherit;
+    font-size: 0.72rem;
+    color: #777;
+    line-height: 1.4;
   }
 </style>
