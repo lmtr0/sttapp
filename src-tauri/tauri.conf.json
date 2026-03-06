@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "yarn task build",
+    "beforeBuildCommand": "yarn build",
     "frontendDist": "../build"
   },
   "app": {
