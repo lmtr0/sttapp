@@ -14,43 +14,14 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 const TRAY_ID: &str = "main-tray";
-const TRAY_ICON_SIZE: u32 = 18;
-
-fn circle_icon_rgba(size: u32, color: [u8; 4]) -> Vec<u8> {
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    let center = (size as f32 - 1.0) / 2.0;
-    let radius = size as f32 * 0.42;
-    let edge = 0.75;
-
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let alpha = ((radius + edge - distance) / edge).clamp(0.0, 1.0);
-
-            let idx = ((y * size + x) * 4) as usize;
-            rgba[idx] = color[0];
-            rgba[idx + 1] = color[1];
-            rgba[idx + 2] = color[2];
-            rgba[idx + 3] = (color[3] as f32 * alpha) as u8;
-        }
-    }
-
-    rgba
-}
 
 fn tray_state_icon(recording: bool) -> tauri::image::Image<'static> {
-    let color = if recording {
-        [224, 60, 60, 255]
+    let bytes: &[u8] = if recording {
+        include_bytes!("../icons/tray_recording.png")
     } else {
-        [42, 119, 255, 255]
+        include_bytes!("../icons/tray_default.png")
     };
-    tauri::image::Image::new_owned(
-        circle_icon_rgba(TRAY_ICON_SIZE, color),
-        TRAY_ICON_SIZE,
-        TRAY_ICON_SIZE,
-    )
+    tauri::image::Image::from_bytes(bytes).expect("failed to load tray icon")
 }
 
 fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, recording: bool) -> Result<(), String> {
@@ -346,11 +317,13 @@ pub fn run() {
                 let stop_item =
                     MenuItemBuilder::with_id("stop_recording", "Stop Recording").build(app)?;
                 let settings_item = MenuItemBuilder::with_id("settings", "Settings").build(app)?;
+                let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
                 let tray_menu = MenuBuilder::new(app)
                     .item(&start_item)
                     .item(&stop_item)
                     .item(&settings_item)
+                    .item(&quit_item)
                     .build()?;
 
                 tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
@@ -379,6 +352,9 @@ pub fn run() {
                         }
                         "settings" => {
                             let _ = open_settings_window(app);
+                        }
+                        "quit" => {
+                            app.exit(0);
                         }
                         _ => {}
                     })
