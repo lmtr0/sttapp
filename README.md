@@ -114,7 +114,6 @@ The tray icon changes state during recording.
 
 ### Window Behavior
 
-- Main window is transparent and always-on-top
 - Positioned at bottom-center of screen
 - Auto-hides after successful transcription
 - Can be closed at any time without affecting recording

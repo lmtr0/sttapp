@@ -85,8 +85,6 @@ fn ensure_main_window_for_recording<R: Runtime>(app: &AppHandle<R>) -> Result<bo
         .inner_size(400.0, 120.0)
         .decorations(false)
         .resizable(false)
-        .transparent(true)
-        .always_on_top(true)
         .build()
         .map_err(|e| e.to_string())?;
 
