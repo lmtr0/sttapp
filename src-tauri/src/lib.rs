@@ -303,9 +303,7 @@ pub fn run() {
     }
 
     builder
-        .plugin(tauri_plugin_stronghold::Builder::new(|_pass| todo!()).build())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
