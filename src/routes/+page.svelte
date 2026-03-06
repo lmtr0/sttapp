@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+  import { loadConfig, type AppConfig } from '../lib/config';
   // libflac.js is a self-contained UMD/asm.js module — import it directly to
   // avoid Vite choking on the CJS require() calls inside the lib/ utilities.
   // @ts-ignore
@@ -10,14 +11,8 @@
 
   // ── Types ──────────────────────────────────────────────────────────────────
 
-  type AppState = 'idle' | 'requesting-mic' | 'recording' | 'transcribing' | 'done' | 'error';
+  type AppState = 'idle' | 'needs-config' | 'requesting-mic' | 'recording' | 'transcribing' | 'done' | 'error';
   type PasteMode = 'normal' | 'plain';
-
-  interface Config {
-    apiKey: string;
-    baseUrl: string;
-    model: string;
-  }
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +23,7 @@
 
   // ── Audio capture internals (not reactive — only touched in functions) ─────
 
-  let config: Config | null = null;
+  let config: AppConfig | null = null;
   let audioContext: AudioContext | null = null;
   let workletNode: AudioWorkletNode | null = null;
   let sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -41,12 +36,21 @@
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   onMount(async () => {
-    config = await invoke<Config>('get_config');
+    await refreshConfig();
     await setTrayRecordingState(false);
+
+    if (!config) {
+      await openSettings();
+    }
 
     // Listen for F8 global shortcut emitted from Rust.
     await listen<{ pasteMode?: PasteMode }>('shortcut-pressed', (event) => {
       const pasteMode: PasteMode = event.payload?.pasteMode ?? 'normal';
+      if (!config) {
+        openSettings();
+        return;
+      }
+
       if (appState === 'recording') {
         stopAndTranscribe(pasteMode);
       } else if (appState === 'idle' || appState === 'done' || appState === 'error') {
@@ -58,6 +62,12 @@
       if (appState === 'recording' || appState === 'requesting-mic' || appState === 'transcribing') {
         return;
       }
+
+      if (!config) {
+        await openSettings();
+        return;
+      }
+
       await startRecording();
     });
 
@@ -67,11 +77,42 @@
       }
     });
 
+    await listen('config-updated', async () => {
+      await refreshConfig();
+    });
+
   });
+
+  async function refreshConfig() {
+    config = await loadConfig();
+    if (!config) {
+      appState = 'needs-config';
+      return;
+    }
+
+    if (appState === 'needs-config') {
+      appState = 'idle';
+    }
+  }
+
+  async function openSettings() {
+    try {
+      await invoke('open_settings');
+    } catch (err) {
+      appState = 'error';
+      errorMsg = `Failed to open settings: ${String(err)}`;
+    }
+  }
 
   // ── Recording ──────────────────────────────────────────────────────────────
 
   async function startRecording() {
+    if (!config) {
+      appState = 'needs-config';
+      await openSettings();
+      return;
+    }
+
     appState = 'requesting-mic';
     chunks.length = 0;
     elapsedSeconds = 0;
@@ -110,6 +151,15 @@
 
   async function stopAndTranscribe(pasteMode: PasteMode = 'normal') {
     if (appState !== 'recording') return;
+
+    if (!config) {
+      appState = 'needs-config';
+      await openSettings();
+      return;
+    }
+
+    const currentConfig = config;
+
     appState = 'transcribing';
     await setTrayRecordingState(false);
 
@@ -190,11 +240,11 @@
       // ── API call ─────────────────────────────────────────────────────────
       const formData = new FormData();
       formData.append('file', flacBlob, 'audio.flac');
-      formData.append('model', config!.model);
+      formData.append('model', currentConfig.model);
 
-      const response = await fetch(`${config!.baseUrl}/audio/transcriptions`, {
+      const response = await fetch(`${currentConfig.baseUrl}/audio/transcriptions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config!.apiKey}` },
+        headers: { Authorization: `Bearer ${currentConfig.apiKey}` },
         body: formData,
       });
 
@@ -232,6 +282,12 @@
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   async function recordAgain() {
+    await refreshConfig();
+    if (!config) {
+      await openSettings();
+      return;
+    }
+
     transcript = '';
     errorMsg = '';
     await startRecording();
@@ -255,6 +311,12 @@
 <main>
   {#if appState === 'idle'}
     <p class="status">Initialising…</p>
+
+  {:else if appState === 'needs-config'}
+    <div class="setup">
+      <p class="status">Set up API settings to continue.</p>
+      <button onclick={openSettings}>Open Settings</button>
+    </div>
 
   {:else if appState === 'requesting-mic'}
     <p class="status">Requesting microphone…</p>
@@ -331,6 +393,12 @@
     color: #555;
     font-size: 0.85rem;
     letter-spacing: 0.03em;
+  }
+
+  .setup {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
   .hint {

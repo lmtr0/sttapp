@@ -756,6 +756,7 @@
         "npm:@tauri-apps/plugin-clipboard-manager@~2.3.2",
         "npm:@tauri-apps/plugin-global-shortcut@~2.3.1",
         "npm:@tauri-apps/plugin-opener@2",
+        "npm:@tauri-apps/plugin-store@^2.4.2",
         "npm:@tauri-apps/plugin-stronghold@~2.3.1",
         "npm:libflacjs@^5.4.0",
         "npm:svelte-check@4",

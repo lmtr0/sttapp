@@ -2,6 +2,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{
     AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
+use tauri_plugin_store::StoreExt;
 
 use std::thread;
 use std::time::Duration;
@@ -144,7 +145,7 @@ fn open_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let settings_window =
         WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("/settings".into()))
             .title("Settings")
-            .inner_size(480.0, 320.0)
+            .inner_size(380.0, 520.0)
             .resizable(true)
             .build()
             .map_err(|e| e.to_string())?;
@@ -153,13 +154,31 @@ fn open_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+fn has_stored_config<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+    let required = ["apiKey", "baseUrl", "model"];
+
+    let has_complete_state = required.iter().all(|key| {
+        store
+            .get(*key)
+            .map(|value| match value {
+                serde_json::Value::String(text) => !text.trim().is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+    });
+
+    store.close_resource();
+    Ok(has_complete_state)
+}
+
 /// Returns the OpenAI-compatible API configuration read from environment variables.
 ///
 /// OPENAI_API_KEY   — required
 /// OPENAI_BASE_URL  — optional, defaults to https://api.openai.com/v1
 /// OPENAI_MODEL     — optional, defaults to whisper-1
 #[tauri::command]
-fn get_config() -> serde_json::Value {
+fn get_env_config() -> serde_json::Value {
     serde_json::json!({
         "apiKey":  std::env::var("OPENAI_API_KEY").unwrap_or_default(),
         "baseUrl": std::env::var("OPENAI_BASE_URL")
@@ -167,6 +186,11 @@ fn get_config() -> serde_json::Value {
         "model":   std::env::var("OPENAI_MODEL")
                      .unwrap_or_else(|_| "whisper-1".into()),
     })
+}
+
+#[tauri::command]
+fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
+    open_settings_window(&app)
 }
 
 /// Prints the transcription result to the terminal (stdout) where the app was launched.
@@ -313,6 +337,7 @@ pub fn run() {
         .plugin(tauri_plugin_stronghold::Builder::new(|_pass| todo!()).build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -374,10 +399,15 @@ pub fn run() {
             app.global_shortcut()
                 .register(Shortcut::new(Some(Modifiers::SHIFT), Code::F8))?;
 
+            if !has_stored_config(app.handle()).unwrap_or(false) {
+                let _ = open_settings_window(app.handle());
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_config,
+            get_env_config,
+            open_settings,
             print_to_stdout,
             paste_active_window,
             set_recording_state,

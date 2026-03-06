@@ -25,6 +25,7 @@ serde_json = "1"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-stronghold = "2"
 enigo = { version = "0.6.1", features = ['wayland', 'tokio', 'xdo'] }
+tauri-plugin-store = "2.4.2"
 
 # Linux only: access the underlying WebKitGTK view to grant permission requests
 # (getUserMedia on Wayland requires programmatic allow() — the GTK dialog is suppressed)
