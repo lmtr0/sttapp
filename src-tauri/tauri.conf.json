@@ -4,9 +4,9 @@
   "version": "1.0.0-alpha",
   "identifier": "com.taresz.sttapp",
   "build": {
-    "beforeDevCommand": "deno task dev",
+    "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "deno task build",
+    "beforeBuildCommand": "yarn task build",
     "frontendDist": "../build"
   },
   "app": {
