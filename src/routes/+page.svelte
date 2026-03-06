@@ -42,18 +42,31 @@
 
   onMount(async () => {
     config = await invoke<Config>('get_config');
+    await setTrayRecordingState(false);
 
     // Listen for F8 global shortcut emitted from Rust.
     await listen<{ pasteMode?: PasteMode }>('shortcut-pressed', (event) => {
       const pasteMode: PasteMode = event.payload?.pasteMode ?? 'normal';
       if (appState === 'recording') {
         stopAndTranscribe(pasteMode);
-      } else if (appState === 'done' || appState === 'error') {
+      } else if (appState === 'idle' || appState === 'done' || appState === 'error') {
         recordAgain();
       }
     });
 
-    await startRecording();
+    await listen('tray-start-recording', async () => {
+      if (appState === 'recording' || appState === 'requesting-mic' || appState === 'transcribing') {
+        return;
+      }
+      await startRecording();
+    });
+
+    await listen('tray-stop-recording', () => {
+      if (appState === 'recording') {
+        stopAndTranscribe('normal');
+      }
+    });
+
   });
 
   // ── Recording ──────────────────────────────────────────────────────────────
@@ -84,10 +97,12 @@
       workletNode.connect(audioContext.destination);
 
       appState = 'recording';
+      await setTrayRecordingState(true);
       timerInterval = setInterval(() => elapsedSeconds++, 1000);
     } catch (err) {
       appState = 'error';
       errorMsg = `Microphone error: ${String(err)}`;
+      await setTrayRecordingState(false);
     }
   }
 
@@ -96,6 +111,7 @@
   async function stopAndTranscribe(pasteMode: PasteMode = 'normal') {
     if (appState !== 'recording') return;
     appState = 'transcribing';
+    await setTrayRecordingState(false);
 
     if (timerInterval) {
       clearInterval(timerInterval);
@@ -204,6 +220,12 @@
     } catch (err) {
       appState = 'error';
       errorMsg = String(err);
+    } finally {
+      try {
+        await invoke('maybe_close_main_window');
+      } catch {
+        // no-op
+      }
     }
   }
 
@@ -213,6 +235,14 @@
     transcript = '';
     errorMsg = '';
     await startRecording();
+  }
+
+  async function setTrayRecordingState(recording: boolean) {
+    try {
+      await invoke('set_recording_state', { recording });
+    } catch {
+      // no-op
+    }
   }
 
   function formatTime(s: number): string {
@@ -252,6 +282,8 @@
     <p class="error">{errorMsg}</p>
     <button onclick={recordAgain}>Retry <kbd>F8</kbd></button>
   {/if}
+
+  <p class="hint">You can close this window at any time.</p>
 </main>
 
 <style>
@@ -276,6 +308,7 @@
   }
 
   main {
+    position: relative;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -298,6 +331,18 @@
     color: #555;
     font-size: 0.85rem;
     letter-spacing: 0.03em;
+  }
+
+  .hint {
+    position: absolute;
+    bottom: 0.55rem;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 0.67rem;
+    color: #666;
+    letter-spacing: 0.02em;
+    pointer-events: none;
   }
 
   /* Recording indicator */
