@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  flutter:
+    name: Flutter checks
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: sttapp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libkeybinder-3.0-dev \
+            libsecret-1-dev \
+            ninja-build \
+            pkg-config
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            sttapp/packages/sttapp_audio/rust -> target
+            sttapp/packages/sttapp_input/rust -> target
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test app
+        run: flutter test
+
+      - name: Install sttapp_audio dependencies
+        run: dart pub get
+        working-directory: sttapp/packages/sttapp_audio
+
+      - name: Test sttapp_audio package
+        run: dart test
+        working-directory: sttapp/packages/sttapp_audio
+
+      - name: Install sttapp_input dependencies
+        run: dart pub get
+        working-directory: sttapp/packages/sttapp_input
+
+      - name: Test sttapp_input package
+        run: dart test
+        working-directory: sttapp/packages/sttapp_input
+
+  rust:
+    name: Rust tests
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - sttapp_audio
+          - sttapp_input
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            pkg-config
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: sttapp/packages/${{ matrix.package }}/rust -> target
+
+      - name: Test ${{ matrix.package }}
+        run: cargo test --locked
+        working-directory: sttapp/packages/${{ matrix.package }}/rust

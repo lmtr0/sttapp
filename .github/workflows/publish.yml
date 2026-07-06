@@ -1,68 +1,196 @@
-name: 'publish'
+name: publish
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - release
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to publish, for example v1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  APP_DIR: sttapp
 
 jobs:
-  publish-tauri:
-    permissions:
-      contents: write
+  validate:
+    name: Validate version
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      build_number: ${{ steps.version.outputs.build_number }}
+
+    steps:
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${REQUESTED_TAG}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a semver tag like v1.2.3, got '${tag}'." >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+          echo "build_number=${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.artifact_name }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest' # for Arm based macs (M1 and above).
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest' # for Intel based macs.
-            args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
-          - platform: 'ubuntu-22.04-arm' # Only available in public repos.
-            args: ''
-          - platform: 'windows-latest'
-            args: ''
+          - artifact_name: sttapp-linux-x64
+            runner: ubuntu-24.04
+            platform: linux
+            rust_target: x86_64-unknown-linux-gnu
+            flutter_target: linux
+            archive_extension: tar.gz
+            archive_command: tar -czf
+            archive_source: build/linux/x64/release/bundle
+          - artifact_name: sttapp-windows-x64
+            runner: windows-2025
+            platform: windows
+            rust_target: x86_64-pc-windows-msvc
+            flutter_target: windows
+            archive_extension: zip
+            archive_source: build/windows/x64/runner/Release
+          - artifact_name: sttapp-macos-x64
+            runner: macos-15-intel
+            platform: macos
+            rust_target: x86_64-apple-darwin
+            flutter_target: macos
+            archive_extension: zip
+            archive_source: build/macos/Build/Products/Release/sttapp.app
 
-    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: sttapp
+
+    env:
+      STTAPP_RUST_BUILDER: zigbuild
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm' # This must match the platform value defined above.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libkeybinder-3.0-dev \
+            libsecret-1-dev \
+            ninja-build \
+            pkg-config
 
-      - name: setup node
-        uses: actions/setup-node@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          node-version: lts/*
-          cache: 'yarn' # Set this to npm, yarn or pnpm.
+          channel: stable
+          cache: true
 
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable # Set this to dtolnay/rust-toolchain@nightly
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: |
+            sttapp/packages/sttapp_audio/rust -> target
+            sttapp/packages/sttapp_input/rust -> target
 
-      - name: install frontend dependencies
-        # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
-        run: yarn install # change this to npm or pnpm depending on which one you use.
+      - name: Install Dart dependencies
+        run: flutter pub get
 
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Flutter ${{ matrix.flutter_target }}
+        run: >
+          flutter build ${{ matrix.flutter_target }}
+          --release
+          --build-name ${{ needs.validate.outputs.version }}
+          --build-number ${{ needs.validate.outputs.build_number }}
+
+      - name: Archive Linux bundle
+        if: matrix.platform == 'linux'
+        run: |
+          archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
+          ${{ matrix.archive_command }} "${archive}" -C "${{ matrix.archive_source }}" .
+          echo "archive_path=${APP_DIR}/${archive}" >> "${GITHUB_ENV}"
+
+      - name: Archive Windows bundle
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $archive = "${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
+          Compress-Archive -Path "${{ matrix.archive_source }}\*" -DestinationPath $archive -Force
+          "archive_path=${env:APP_DIR}/$archive" >> $env:GITHUB_ENV
+
+      - name: Archive macOS app
+        if: matrix.platform == 'macos'
+        run: |
+          archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
+          ditto -c -k --sequesterRsrc --keepParent "${{ matrix.archive_source }}" "${archive}"
+          echo "archive_path=${APP_DIR}/${archive}" >> "${GITHUB_ENV}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
-          releaseName: 'SttApp v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
+          name: ${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}
+          path: ${{ env.archive_path }}
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub release
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: sttapp ${{ needs.validate.outputs.tag }}
+          body: See the assets to download this version and install.
+          draft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          files: release-assets/*

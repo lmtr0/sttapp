@@ -7,7 +7,7 @@ project(runner LANGUAGES CXX)
 set(BINARY_NAME "sttapp")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "com.example.sttapp")
+set(APPLICATION_ID "com.taresz.sttapp")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -74,6 +74,11 @@ set_target_properties(${BINARY_NAME}
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+if(TARGET hotkey_manager_linux_plugin AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(hotkey_manager_linux_plugin PRIVATE
+    -Wno-sometimes-uninitialized)
+endif()
+
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
@@ -92,6 +97,14 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/com.taresz.sttapp.desktop"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share/applications"
+  COMPONENT Runtime)
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/icons/hicolor"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

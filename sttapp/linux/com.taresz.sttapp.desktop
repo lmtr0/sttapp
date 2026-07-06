@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=sttapp
+Comment=Speech-to-text capture and paste
+Exec=sttapp
+Icon=sttapp
+Terminal=false
+Categories=Utility;
+StartupWMClass=com.taresz.sttapp

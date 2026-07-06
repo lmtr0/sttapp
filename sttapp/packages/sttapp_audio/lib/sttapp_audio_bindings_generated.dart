@@ -46,6 +46,26 @@ external ffi.Pointer<ffi.Int16> sttapp_audio_clip_data(
   ffi.Pointer<ffi.Void> clip,
 );
 
+@ffi.Native<ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>)>(
+  assetId: _assetId,
+)
+external ffi.Pointer<ffi.Void> sttapp_audio_clip_to_flac(
+  ffi.Pointer<ffi.Void> clip,
+);
+
+@ffi.Native<ffi.Uint64 Function(ffi.Pointer<ffi.Void>)>(assetId: _assetId)
+external int sttapp_audio_encoded_audio_len(ffi.Pointer<ffi.Void> encoded);
+
+@ffi.Native<ffi.Pointer<ffi.Uint8> Function(ffi.Pointer<ffi.Void>)>(
+  assetId: _assetId,
+)
+external ffi.Pointer<ffi.Uint8> sttapp_audio_encoded_audio_data(
+  ffi.Pointer<ffi.Void> encoded,
+);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>(assetId: _assetId)
+external void sttapp_audio_encoded_audio_free(ffi.Pointer<ffi.Void> encoded);
+
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>(assetId: _assetId)
 external void sttapp_audio_clip_free(ffi.Pointer<ffi.Void> clip);
 

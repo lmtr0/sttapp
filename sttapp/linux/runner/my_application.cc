@@ -1,11 +1,13 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <string>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "sttapp_global_shortcuts.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -13,6 +15,68 @@ struct _MyApplication {
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+static std::string desktop_exec_quote(const gchar* value) {
+  std::string quoted = "\"";
+  for (const gchar* cursor = value; cursor != nullptr && *cursor != '\0';
+       ++cursor) {
+    switch (*cursor) {
+      case '\\':
+      case '"':
+      case '`':
+      case '$':
+        quoted += '\\';
+        quoted += *cursor;
+        break;
+      case '\n':
+        break;
+      default:
+        quoted += *cursor;
+    }
+  }
+  quoted += "\"";
+  return quoted;
+}
+
+static void ensure_user_desktop_file() {
+  g_autoptr(GError) error = nullptr;
+  g_autofree gchar* executable_path = g_file_read_link("/proc/self/exe", &error);
+  if (executable_path == nullptr) {
+    g_warning("Failed to resolve executable path for desktop entry: %s",
+              error->message);
+    return;
+  }
+
+  g_autofree gchar* applications_dir =
+      g_build_filename(g_get_user_data_dir(), "applications", nullptr);
+  if (g_mkdir_with_parents(applications_dir, 0700) != 0) {
+    g_warning("Failed to create user applications directory: %s",
+              applications_dir);
+    return;
+  }
+
+  const std::string exec = desktop_exec_quote(executable_path);
+  g_autofree gchar* desktop_file_path =
+      g_build_filename(applications_dir, APPLICATION_ID ".desktop", nullptr);
+  g_autofree gchar* desktop_file_contents = g_strdup_printf(
+      "[Desktop Entry]\n"
+      "Type=Application\n"
+      "Name=sttapp\n"
+      "Comment=Speech-to-text capture and paste\n"
+      "Exec=%s\n"
+      "Icon=sttapp\n"
+      "Terminal=false\n"
+      "Categories=Utility;\n"
+      "StartupWMClass=%s\n",
+      exec.c_str(), APPLICATION_ID);
+
+  g_autoptr(GError) write_error = nullptr;
+  if (!g_file_set_contents(desktop_file_path, desktop_file_contents, -1,
+                           &write_error)) {
+    g_warning("Failed to write desktop entry %s: %s", desktop_file_path,
+              write_error->message);
+  }
+}
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
@@ -65,6 +129,7 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  sttapp_global_shortcuts_register(view);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -132,8 +197,10 @@ MyApplication* my_application_new() {
   // corresponding .desktop file. This ensures better integration by allowing
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
+  g_set_application_name("sttapp");
+  ensure_user_desktop_file();
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
-                                     "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     "application-id", APPLICATION_ID,
+                                     nullptr));
 }

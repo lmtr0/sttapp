@@ -5,6 +5,7 @@ import 'package:hooks/hooks.dart';
 
 const _assetName = 'sttapp_audio_bindings_generated.dart';
 const _libraryName = 'sttapp_audio';
+const _rustBuilderEnvironmentVariable = 'STTAPP_RUST_BUILDER';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
@@ -22,26 +23,25 @@ void main(List<String> args) async {
       input.packageRoot.resolve('rust/Cargo.toml'),
     ).path;
 
-    final result = await Process.run('cargo', [
-      'build',
+    final cargoSubcommand = _cargoSubcommand();
+    final cargoArgs = [
+      cargoSubcommand,
       '--manifest-path',
       manifestPath,
       '--release',
       '--target',
       targetTriple,
-    ], workingDirectory: Directory.fromUri(input.packageRoot).path);
+    ];
+    final result = await Process.run(
+      'cargo',
+      cargoArgs,
+      workingDirectory: Directory.fromUri(input.packageRoot).path,
+    );
 
     if (result.exitCode != 0) {
       throw ProcessException(
         'cargo',
-        [
-          'build',
-          '--manifest-path',
-          manifestPath,
-          '--release',
-          '--target',
-          targetTriple,
-        ],
+        cargoArgs,
         '${result.stdout}\n${result.stderr}',
         result.exitCode,
       );
@@ -66,6 +66,12 @@ void main(List<String> args) async {
       ),
     );
   });
+}
+
+String _cargoSubcommand() {
+  return Platform.environment[_rustBuilderEnvironmentVariable] == 'zigbuild'
+      ? 'zigbuild'
+      : 'build';
 }
 
 String _rustTargetTriple(OS os, Architecture architecture) {

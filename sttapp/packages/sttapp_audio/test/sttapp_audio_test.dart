@@ -4,6 +4,6 @@ import 'package:sttapp_audio/sttapp_audio.dart';
 
 void main() {
   test('loads the bundled Rust library', () {
-    expect(SttappAudio.nativeApiVersion, 2);
+    expect(SttappAudio.nativeApiVersion, 3);
   });
 }
