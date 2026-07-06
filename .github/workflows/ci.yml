@@ -28,6 +28,7 @@ jobs:
             libgtk-3-dev \
             libkeybinder-3.0-dev \
             libsecret-1-dev \
+            libxkbcommon-dev \
             ninja-build \
             pkg-config
 
@@ -91,6 +92,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libasound2-dev \
+            libxkbcommon-dev \
             pkg-config
 
       - name: Setup Rust
