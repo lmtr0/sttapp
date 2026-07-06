@@ -13,10 +13,6 @@ jobs:
   flutter:
     name: Flutter checks
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: sttapp
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,8 +44,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            sttapp/packages/sttapp_audio/rust -> target
-            sttapp/packages/sttapp_input/rust -> target
+            packages/sttapp_audio/rust -> target
+            packages/sttapp_input/rust -> target
 
       - name: Install Dart dependencies
         run: flutter pub get
@@ -62,19 +58,19 @@ jobs:
 
       - name: Install sttapp_audio dependencies
         run: dart pub get
-        working-directory: sttapp/packages/sttapp_audio
+        working-directory: packages/sttapp_audio
 
       - name: Test sttapp_audio package
         run: dart test
-        working-directory: sttapp/packages/sttapp_audio
+        working-directory: packages/sttapp_audio
 
       - name: Install sttapp_input dependencies
         run: dart pub get
-        working-directory: sttapp/packages/sttapp_input
+        working-directory: packages/sttapp_input
 
       - name: Test sttapp_input package
         run: dart test
-        working-directory: sttapp/packages/sttapp_input
+        working-directory: packages/sttapp_input
 
   rust:
     name: Rust tests
@@ -103,8 +99,8 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: sttapp/packages/${{ matrix.package }}/rust -> target
+          workspaces: packages/${{ matrix.package }}/rust -> target
 
       - name: Test ${{ matrix.package }}
         run: cargo test --locked
-        working-directory: sttapp/packages/${{ matrix.package }}/rust
+        working-directory: packages/${{ matrix.package }}/rust

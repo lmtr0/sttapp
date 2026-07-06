@@ -14,9 +14,6 @@ on:
 permissions:
   contents: write
 
-env:
-  APP_DIR: sttapp
-
 jobs:
   validate:
     name: Validate version
@@ -80,10 +77,6 @@ jobs:
             archive_extension: zip
             archive_source: build/macos/Build/Products/Release/sttapp.app
 
-    defaults:
-      run:
-        working-directory: sttapp
-
     env:
       STTAPP_RUST_BUILDER: zigbuild
 
@@ -129,8 +122,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: |
-            sttapp/packages/sttapp_audio/rust -> target
-            sttapp/packages/sttapp_input/rust -> target
+            packages/sttapp_audio/rust -> target
+            packages/sttapp_input/rust -> target
 
       - name: Install Dart dependencies
         run: flutter pub get
@@ -147,7 +140,7 @@ jobs:
         run: |
           archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
           ${{ matrix.archive_command }} "${archive}" -C "${{ matrix.archive_source }}" .
-          echo "archive_path=${APP_DIR}/${archive}" >> "${GITHUB_ENV}"
+          echo "archive_path=${archive}" >> "${GITHUB_ENV}"
 
       - name: Archive Windows bundle
         if: matrix.platform == 'windows'
@@ -155,14 +148,14 @@ jobs:
         run: |
           $archive = "${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
           Compress-Archive -Path "${{ matrix.archive_source }}\*" -DestinationPath $archive -Force
-          "archive_path=${env:APP_DIR}/$archive" >> $env:GITHUB_ENV
+          "archive_path=$archive" >> $env:GITHUB_ENV
 
       - name: Archive macOS app
         if: matrix.platform == 'macos'
         run: |
           archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
           ditto -c -k --sequesterRsrc --keepParent "${{ matrix.archive_source }}" "${archive}"
-          echo "archive_path=${APP_DIR}/${archive}" >> "${GITHUB_ENV}"
+          echo "archive_path=${archive}" >> "${GITHUB_ENV}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
