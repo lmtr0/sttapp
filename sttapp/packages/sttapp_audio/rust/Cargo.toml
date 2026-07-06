@@ -1,0 +1,12 @@
+[package]
+name = "sttapp-audio"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "sttapp_audio"
+crate-type = ["cdylib"]
+
+[dependencies]
+rodio = { version = "0.22", default-features = false, features = ["recording"] }
