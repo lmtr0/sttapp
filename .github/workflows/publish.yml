@@ -140,6 +140,48 @@ jobs:
           --build-name ${{ needs.validate.outputs.version }}
           --build-number ${{ needs.validate.outputs.build_number }}
 
+      - name: Bundle Linux runtime libraries and launcher
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          bundle_dir="${{ matrix.archive_source }}"
+          bundle_lib_dir="${{ matrix.archive_source }}/lib"
+          mkdir -p "${bundle_lib_dir}"
+
+          copy_library() {
+            local soname="$1"
+            local source_path
+
+            source_path="$(ldconfig -p | awk -v soname="${soname}" '$1 == soname { print $NF; exit }')"
+            if [ -z "${source_path}" ]; then
+              echo "Could not find ${soname} in the dynamic linker cache." >&2
+              exit 1
+            fi
+
+            cp -L "${source_path}" "${bundle_lib_dir}/${soname}"
+          }
+
+          copy_library libayatana-appindicator3.so.1
+          copy_library libayatana-indicator3.so.7
+          copy_library libayatana-ido3-0.4.so.0
+          copy_library libdbusmenu-glib.so.4
+          copy_library libdbusmenu-gtk3.so.4
+          copy_library libkeybinder-3.0.so.0
+          copy_library libsecret-1.so.0
+
+          mv "${bundle_dir}/sttapp" "${bundle_dir}/sttapp.bin"
+          cat > "${bundle_dir}/sttapp" <<'SH'
+          #!/usr/bin/env sh
+          set -eu
+
+          app_dir="$(dirname "$0")"
+          app_dir="$(CDPATH= cd "$app_dir" && pwd -P)"
+
+          export LD_LIBRARY_PATH="${app_dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          exec "${app_dir}/sttapp.bin" "$@"
+          SH
+          chmod +x "${bundle_dir}/sttapp"
+
       - name: Archive Linux bundle
         if: matrix.platform == 'linux'
         run: |
