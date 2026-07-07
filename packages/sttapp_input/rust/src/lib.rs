@@ -1,13 +1,17 @@
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, CStr, CString};
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use enigo::{
-    Direction::{Click, Press, Release},
+    Direction::{Press, Release},
     Enigo, Key, Keyboard, Settings,
 };
 
 const PASTE_MODE_NORMAL: i32 = 0;
 const PASTE_MODE_PLAIN: i32 = 1;
+const CHORD_SETTLE_DELAY: Duration = Duration::from_millis(20);
+const KEY_HOLD_DELAY: Duration = Duration::from_millis(12);
 
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
@@ -19,6 +23,20 @@ pub extern "C" fn sttapp_input_api_version() -> i32 {
 #[no_mangle]
 pub extern "C" fn sttapp_input_paste(mode: i32) -> bool {
     match paste_mode_from_int(mode).and_then(paste) {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(error) => {
+            set_last_error(error);
+            false
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sttapp_input_set_clipboard_text(text: *const c_char) -> bool {
+    match set_clipboard_text(text) {
         Ok(()) => {
             clear_last_error();
             true
@@ -67,10 +85,41 @@ fn paste_mode_from_int(mode: i32) -> Result<PasteMode, String> {
 fn paste(mode: PasteMode) -> Result<(), String> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|error| format!("failed to initialize desktop input: {error}"))?;
+    let shortcut = paste_shortcut(mode);
+    chord(&mut enigo, shortcut.modifiers, shortcut.key)
+}
 
+unsafe fn set_clipboard_text(text: *const c_char) -> Result<(), String> {
+    if text.is_null() {
+        return Err("clipboard text pointer was null".to_string());
+    }
+
+    let text = CStr::from_ptr(text)
+        .to_str()
+        .map_err(|error| format!("clipboard text was not valid UTF-8: {error}"))?;
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|error| format!("failed to initialize clipboard: {error}"))?;
+    clipboard
+        .set_text(text.to_owned())
+        .map_err(|error| format!("failed to set clipboard text: {error}"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PasteShortcut {
+    modifiers: &'static [Key],
+    key: Key,
+}
+
+fn paste_shortcut(mode: PasteMode) -> PasteShortcut {
     match mode {
-        PasteMode::Normal => chord(&mut enigo, normal_paste_modifiers(), 'v'),
-        PasteMode::Plain => chord(&mut enigo, plain_paste_modifiers(), 'v'),
+        PasteMode::Normal => PasteShortcut {
+            modifiers: normal_paste_modifiers(),
+            key: Key::Unicode('v'),
+        },
+        PasteMode::Plain => PasteShortcut {
+            modifiers: plain_paste_modifiers(),
+            key: Key::Unicode('v'),
+        },
     }
 }
 
@@ -94,7 +143,39 @@ fn plain_paste_modifiers() -> &'static [Key] {
     &[Key::Control, Key::Shift]
 }
 
-fn chord(enigo: &mut Enigo, modifiers: &[Key], key: char) -> Result<(), String> {
+// fn chord(enigo: &mut Enigo, modifiers: &[Key], key: Key) -> Result<(), String> {
+//     let mut pressed = Vec::with_capacity(modifiers.len() + 1);
+
+//     for modifier in modifiers {
+//         if let Err(error) = press_key(enigo, *modifier, "paste modifier") {
+//             let _ = release_pressed(enigo, &mut pressed);
+//             return Err(error);
+//         }
+//         pressed.push(*modifier);
+//     }
+
+//     // thread::sleep(CHORD_SETTLE_DELAY);
+
+//     if let Err(error) = press_key(enigo, key, "paste key") {
+//         let _ = release_pressed(enigo, &mut pressed);
+//         return Err(error);
+//     }
+//     pressed.push(key);
+
+//     // thread::sleep(KEY_HOLD_DELAY);
+
+//     let key_release_result = release_key(enigo, key, "paste key");
+//     pressed.pop();
+
+//     // thread::sleep(CHORD_SETTLE_DELAY);
+
+//     let modifier_release_result = release_pressed(enigo, &mut pressed);
+//     key_release_result?;
+//     modifier_release_result?;
+//     Ok(())
+// }
+
+fn chord(enigo: &mut Enigo, modifiers: &[Key], key: Key) -> Result<(), String> {
     for modifier in modifiers {
         enigo
             .key(*modifier, Press)
@@ -102,7 +183,7 @@ fn chord(enigo: &mut Enigo, modifiers: &[Key], key: char) -> Result<(), String> 
     }
 
     let click_result = enigo
-        .key(Key::Unicode(key), Click)
+        .key(key, enigo::Direction::Click)
         .map_err(|error| format!("failed to send paste key: {error}"));
 
     let mut release_error = None;
@@ -117,6 +198,30 @@ fn chord(enigo: &mut Enigo, modifiers: &[Key], key: char) -> Result<(), String> 
         return Err(error);
     }
     Ok(())
+}
+
+fn press_key(enigo: &mut Enigo, key: Key, label: &str) -> Result<(), String> {
+    println!("Pressing: {label}");
+    enigo
+        .key(key, Press)
+        .map_err(|error| format!("failed to press {label}: {error}"))
+}
+
+fn release_key(enigo: &mut Enigo, key: Key, label: &str) -> Result<(), String> {
+    println!("Releasing: {label}");
+    enigo
+        .key(key, Release)
+        .map_err(|error| format!("failed to release {label}: {error}"))
+}
+
+fn release_pressed(enigo: &mut Enigo, pressed: &mut Vec<Key>) -> Result<(), String> {
+    let mut release_error = None;
+    while let Some(key) = pressed.pop() {
+        if let Err(error) = release_key(enigo, key, "paste modifier") {
+            release_error.get_or_insert(error);
+        }
+    }
+    release_error.map_or(Ok(()), Err)
 }
 
 fn set_last_error(message: impl Into<String>) {
@@ -147,5 +252,31 @@ mod tests {
     fn valid_paste_modes_parse() {
         assert_eq!(paste_mode_from_int(0), Ok(PasteMode::Normal));
         assert_eq!(paste_mode_from_int(1), Ok(PasteMode::Plain));
+    }
+
+    #[test]
+    fn paste_modes_map_to_expected_shortcuts() {
+        assert_eq!(
+            paste_shortcut(PasteMode::Normal),
+            PasteShortcut {
+                modifiers: normal_paste_modifiers(),
+                key: Key::Unicode('v'),
+            }
+        );
+        assert_eq!(
+            paste_shortcut(PasteMode::Plain),
+            PasteShortcut {
+                modifiers: plain_paste_modifiers(),
+                key: Key::Unicode('v'),
+            }
+        );
+    }
+
+    #[test]
+    fn null_clipboard_text_fails_cleanly() {
+        assert_eq!(
+            unsafe { set_clipboard_text(std::ptr::null()) }.unwrap_err(),
+            "clipboard text pointer was null"
+        );
     }
 }

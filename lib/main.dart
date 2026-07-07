@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/hotkey_service.dart';
+import 'package:sttapp/services/transcript_delivery_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
 import 'package:sttapp_audio/sttapp_audio.dart';
 import 'package:sttapp_input/sttapp_input.dart';
@@ -49,6 +49,7 @@ class SttApp extends StatelessWidget {
     super.key,
     this.configRepository,
     this.transcriptionService,
+    this.transcriptDeliveryService,
     this.hotkeyService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
@@ -56,6 +57,7 @@ class SttApp extends StatelessWidget {
 
   final ConfigRepository? configRepository;
   final TranscriptionService? transcriptionService;
+  final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
@@ -72,6 +74,7 @@ class SttApp extends StatelessWidget {
       home: RecorderHome(
         configRepository: configRepository,
         transcriptionService: transcriptionService,
+        transcriptDeliveryService: transcriptDeliveryService,
         hotkeyService: hotkeyService,
         supportsShortcutSettings: supportsShortcutSettings,
         initializePlatformServices: initializePlatformServices,
@@ -85,6 +88,7 @@ class RecorderHome extends StatefulWidget {
     super.key,
     this.configRepository,
     this.transcriptionService,
+    this.transcriptDeliveryService,
     this.hotkeyService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
@@ -92,6 +96,7 @@ class RecorderHome extends StatefulWidget {
 
   final ConfigRepository? configRepository;
   final TranscriptionService? transcriptionService;
+  final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
@@ -107,6 +112,7 @@ class _RecorderHomeState extends State<RecorderHome>
   late final AudioRecorder _recorder;
   late final ConfigRepository _configRepository;
   late final TranscriptionService _transcriptionService;
+  late final TranscriptDeliveryService _transcriptDeliveryService;
   late final HotkeyService _hotkeyService;
   late final bool _ownsTranscriptionService;
   late final bool _supportsShortcutSettings;
@@ -146,6 +152,8 @@ class _RecorderHomeState extends State<RecorderHome>
     _configRepository = widget.configRepository ?? ConfigRepository();
     _transcriptionService =
         widget.transcriptionService ?? TranscriptionService();
+    _transcriptDeliveryService =
+        widget.transcriptDeliveryService ?? const TranscriptDeliveryService();
     _hotkeyService = widget.hotkeyService ?? HotkeyService();
     _ownsTranscriptionService = widget.transcriptionService == null;
     _supportsShortcutSettings =
@@ -265,7 +273,6 @@ class _RecorderHomeState extends State<RecorderHome>
         MenuItem(key: 'stop_capture', label: 'Stop and paste'),
         MenuItem.separator(),
         MenuItem(key: 'settings', label: 'Settings'),
-        MenuItem(key: 'show_window', label: 'Show'),
         MenuItem(key: 'quit_app', label: 'Quit'),
       ],
     );
@@ -359,8 +366,7 @@ class _RecorderHomeState extends State<RecorderHome>
         return;
       }
 
-      await Clipboard.setData(ClipboardData(text: transcript));
-      await DesktopInput.paste(resolvedPasteMode);
+      await _transcriptDeliveryService.deliver(transcript, resolvedPasteMode);
 
       if (!mounted) {
         return;
@@ -636,8 +642,6 @@ class _RecorderHomeState extends State<RecorderHome>
       case 'stop_capture':
         unawaited(_stopCapture());
       case 'settings':
-        _openSettings();
-      case 'show_window':
         _openSettings();
       case 'quit_app':
         unawaited(_quit());

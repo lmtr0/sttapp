@@ -13,6 +13,8 @@ void main(List<String> args) async {
       return;
     }
 
+    _addRustDependencies(input.packageRoot, output);
+
     final codeConfig = input.config.code;
     final targetTriple = _rustTargetTriple(
       codeConfig.targetOS,
@@ -66,6 +68,14 @@ void main(List<String> args) async {
       ),
     );
   });
+}
+
+void _addRustDependencies(Uri packageRoot, BuildOutputBuilder output) {
+  output.dependencies.addAll([
+    packageRoot.resolve('rust/Cargo.toml'),
+    packageRoot.resolve('rust/Cargo.lock'),
+    packageRoot.resolve('rust/src/'),
+  ]);
 }
 
 String _cargoSubcommand() {

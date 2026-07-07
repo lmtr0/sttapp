@@ -1,5 +1,7 @@
 import 'dart:ffi' as ffi;
 
+import 'package:ffi/ffi.dart';
+
 import 'sttapp_input_bindings_generated.dart' as bindings;
 
 enum PasteMode {
@@ -21,6 +23,20 @@ final class DesktopInput {
     final ok = bindings.sttapp_input_paste(mode.nativeValue);
     if (!ok) {
       throw StateError(_lastNativeError());
+    }
+  }
+
+  static Future<void> setClipboardText(String text) async {
+    final nativeText = text.toNativeUtf8();
+    try {
+      final ok = bindings.sttapp_input_set_clipboard_text(
+        nativeText.cast<ffi.Char>(),
+      );
+      if (!ok) {
+        throw StateError(_lastNativeError());
+      }
+    } finally {
+      calloc.free(nativeText);
     }
   }
 }
