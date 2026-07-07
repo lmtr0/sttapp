@@ -178,16 +178,39 @@ jobs:
           app_dir="$(CDPATH= cd "$app_dir" && pwd -P)"
 
           export LD_LIBRARY_PATH="${app_dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          export STTAPP_LAUNCHER_PATH="${app_dir}/sttapp"
           exec "${app_dir}/sttapp.bin" "$@"
           SH
           chmod +x "${bundle_dir}/sttapp"
 
       - name: Archive Linux bundle
         if: matrix.platform == 'linux'
+        shell: bash
         run: |
           archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
           ${{ matrix.archive_command }} "${archive}" -C "${{ matrix.archive_source }}" .
-          echo "archive_path=${archive}" >> "${GITHUB_ENV}"
+          appdir="sttapp.AppDir"
+          appimage="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.AppImage"
+
+          rm -rf "${appdir}"
+          cp -a "${{ matrix.archive_source }}" "${appdir}"
+          cp linux/com.taresz.sttapp.desktop "${appdir}/com.taresz.sttapp.desktop"
+          cp linux/icons/hicolor/512x512/apps/sttapp.png "${appdir}/sttapp.png"
+          ln -s sttapp "${appdir}/AppRun"
+
+          curl -fsSL \
+            -o appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 VERSION="${{ needs.validate.outputs.version }}" \
+            ./appimagetool-x86_64.AppImage "${appdir}" "${appimage}"
+
+          {
+            echo "archive_path<<EOF"
+            echo "${archive}"
+            echo "${appimage}"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
 
       - name: Archive Windows bundle
         if: matrix.platform == 'windows'

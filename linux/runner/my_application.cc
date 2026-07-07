@@ -38,6 +38,36 @@ static std::string desktop_exec_quote(const gchar* value) {
   return quoted;
 }
 
+static bool is_executable_file(const gchar* path) {
+  return path != nullptr && path[0] != '\0' &&
+         g_file_test(path, static_cast<GFileTest>(G_FILE_TEST_IS_REGULAR |
+                                                  G_FILE_TEST_IS_EXECUTABLE));
+}
+
+static gchar* get_desktop_exec_target(const gchar* executable_path) {
+  const gchar* appimage_path = g_getenv("APPIMAGE");
+  if (is_executable_file(appimage_path)) {
+    return g_strdup(appimage_path);
+  }
+
+  const gchar* launcher_path = g_getenv("STTAPP_LAUNCHER_PATH");
+  if (is_executable_file(launcher_path)) {
+    return g_strdup(launcher_path);
+  }
+
+  g_autofree gchar* executable_basename = g_path_get_basename(executable_path);
+  if (g_strcmp0(executable_basename, "sttapp.bin") == 0) {
+    g_autofree gchar* executable_dirname = g_path_get_dirname(executable_path);
+    g_autofree gchar* sibling_launcher =
+        g_build_filename(executable_dirname, "sttapp", nullptr);
+    if (is_executable_file(sibling_launcher)) {
+      return g_strdup(sibling_launcher);
+    }
+  }
+
+  return g_strdup(executable_path);
+}
+
 static void ensure_user_desktop_file() {
   g_autoptr(GError) error = nullptr;
   g_autofree gchar* executable_path = g_file_read_link("/proc/self/exe", &error);
@@ -55,7 +85,9 @@ static void ensure_user_desktop_file() {
     return;
   }
 
-  const std::string exec = desktop_exec_quote(executable_path);
+  g_autofree gchar* desktop_exec_target =
+      get_desktop_exec_target(executable_path);
+  const std::string exec = desktop_exec_quote(desktop_exec_target);
   g_autofree gchar* desktop_file_path =
       g_build_filename(applications_dir, APPLICATION_ID ".desktop", nullptr);
   g_autofree gchar* desktop_file_contents = g_strdup_printf(
@@ -69,6 +101,14 @@ static void ensure_user_desktop_file() {
       "Categories=Utility;\n"
       "StartupWMClass=%s\n",
       exec.c_str(), APPLICATION_ID);
+
+  g_autofree gchar* existing_desktop_file_contents = nullptr;
+  g_autoptr(GError) read_error = nullptr;
+  if (g_file_get_contents(desktop_file_path, &existing_desktop_file_contents,
+                          nullptr, &read_error) &&
+      g_strcmp0(existing_desktop_file_contents, desktop_file_contents) == 0) {
+    return;
+  }
 
   g_autoptr(GError) write_error = nullptr;
   if (!g_file_set_contents(desktop_file_path, desktop_file_contents, -1,
