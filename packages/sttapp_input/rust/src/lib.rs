@@ -1,7 +1,5 @@
 use std::ffi::{c_char, CStr, CString};
 use std::sync::Mutex;
-use std::thread;
-use std::time::Duration;
 
 use enigo::{
     Direction::{Press, Release},
@@ -10,8 +8,6 @@ use enigo::{
 
 const PASTE_MODE_NORMAL: i32 = 0;
 const PASTE_MODE_PLAIN: i32 = 1;
-const CHORD_SETTLE_DELAY: Duration = Duration::from_millis(20);
-const KEY_HOLD_DELAY: Duration = Duration::from_millis(12);
 
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
@@ -143,38 +139,6 @@ fn plain_paste_modifiers() -> &'static [Key] {
     &[Key::Control, Key::Shift]
 }
 
-// fn chord(enigo: &mut Enigo, modifiers: &[Key], key: Key) -> Result<(), String> {
-//     let mut pressed = Vec::with_capacity(modifiers.len() + 1);
-
-//     for modifier in modifiers {
-//         if let Err(error) = press_key(enigo, *modifier, "paste modifier") {
-//             let _ = release_pressed(enigo, &mut pressed);
-//             return Err(error);
-//         }
-//         pressed.push(*modifier);
-//     }
-
-//     // thread::sleep(CHORD_SETTLE_DELAY);
-
-//     if let Err(error) = press_key(enigo, key, "paste key") {
-//         let _ = release_pressed(enigo, &mut pressed);
-//         return Err(error);
-//     }
-//     pressed.push(key);
-
-//     // thread::sleep(KEY_HOLD_DELAY);
-
-//     let key_release_result = release_key(enigo, key, "paste key");
-//     pressed.pop();
-
-//     // thread::sleep(CHORD_SETTLE_DELAY);
-
-//     let modifier_release_result = release_pressed(enigo, &mut pressed);
-//     key_release_result?;
-//     modifier_release_result?;
-//     Ok(())
-// }
-
 fn chord(enigo: &mut Enigo, modifiers: &[Key], key: Key) -> Result<(), String> {
     for modifier in modifiers {
         enigo
@@ -198,30 +162,6 @@ fn chord(enigo: &mut Enigo, modifiers: &[Key], key: Key) -> Result<(), String> {
         return Err(error);
     }
     Ok(())
-}
-
-fn press_key(enigo: &mut Enigo, key: Key, label: &str) -> Result<(), String> {
-    println!("Pressing: {label}");
-    enigo
-        .key(key, Press)
-        .map_err(|error| format!("failed to press {label}: {error}"))
-}
-
-fn release_key(enigo: &mut Enigo, key: Key, label: &str) -> Result<(), String> {
-    println!("Releasing: {label}");
-    enigo
-        .key(key, Release)
-        .map_err(|error| format!("failed to release {label}: {error}"))
-}
-
-fn release_pressed(enigo: &mut Enigo, pressed: &mut Vec<Key>) -> Result<(), String> {
-    let mut release_error = None;
-    while let Some(key) = pressed.pop() {
-        if let Err(error) = release_key(enigo, key, "paste modifier") {
-            release_error.get_or_insert(error);
-        }
-    }
-    release_error.map_or(Ok(()), Err)
 }
 
 fn set_last_error(message: impl Into<String>) {
