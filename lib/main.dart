@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/hotkey_service.dart';
+import 'package:sttapp/services/startup_error_tracker.dart';
 import 'package:sttapp/services/transcript_delivery_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
 import 'package:sttapp_audio/sttapp_audio.dart';
@@ -19,7 +20,11 @@ const _trayDefaultIco = 'assets/tray/tray_default.ico';
 const _trayRecordingIco = 'assets/tray/tray_recording.ico';
 const _customModelValue = '__custom__';
 
-Future<void> main() async {
+Future<void> main() {
+  return StartupErrorTracker.runGuarded(_main);
+}
+
+Future<void> _main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   await windowManager.setPreventClose(true);
@@ -190,6 +195,11 @@ class _RecorderHomeState extends State<RecorderHome>
     await _loadConfig();
     if (!_initializePlatformServices) {
       return;
+    }
+    try {
+      await _transcriptDeliveryService.preparePaste();
+    } catch (error) {
+      debugPrint('Desktop input warm-up failed: $error');
     }
     await _registerHotkeys();
   }

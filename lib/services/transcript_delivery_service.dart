@@ -7,6 +7,8 @@ import 'package:sttapp_input/sttapp_input.dart';
 const defaultPasteTriggerDelay = Duration(milliseconds: 120);
 
 abstract interface class DesktopInputClient {
+  Future<void> preparePaste();
+
   Future<void> setClipboardText(String text);
 
   Future<void> paste(PasteMode mode);
@@ -14,6 +16,11 @@ abstract interface class DesktopInputClient {
 
 final class NativeDesktopInputClient implements DesktopInputClient {
   const NativeDesktopInputClient();
+
+  @override
+  Future<void> preparePaste() {
+    return DesktopInput.prepare();
+  }
 
   @override
   Future<void> setClipboardText(String text) {
@@ -51,6 +58,7 @@ final class TranscriptDeliveryService {
   final Duration pasteTriggerDelay;
 
   Future<void> deliver(String transcript, PasteMode pasteMode) async {
+    await preparePaste();
     await copyToClipboard(transcript);
 
     if (pasteTriggerDelay > Duration.zero) {
@@ -58,6 +66,10 @@ final class TranscriptDeliveryService {
     }
 
     await paste(pasteMode);
+  }
+
+  Future<void> preparePaste() {
+    return input.preparePaste();
   }
 
   Future<void> copyToClipboard(String transcript) async {

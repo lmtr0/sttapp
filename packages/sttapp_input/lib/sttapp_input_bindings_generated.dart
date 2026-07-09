@@ -7,6 +7,9 @@ const _assetId = 'package:sttapp_input/sttapp_input_bindings_generated.dart';
 @ffi.Native<ffi.Int32 Function()>(assetId: _assetId)
 external int sttapp_input_api_version();
 
+@ffi.Native<ffi.Bool Function()>(assetId: _assetId)
+external bool sttapp_input_prepare();
+
 @ffi.Native<ffi.Bool Function(ffi.Int32)>(assetId: _assetId)
 external bool sttapp_input_paste(int mode);
 

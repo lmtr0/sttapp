@@ -10,8 +10,36 @@ void main() {
 
     await service.deliver('hello', PasteMode.normal);
 
-    expect(input.calls, ['native clipboard: hello', 'paste: normal']);
+    expect(input.calls, [
+      'prepare paste',
+      'native clipboard: hello',
+      'paste: normal',
+    ]);
     expect(clipboard.text, 'hello');
+  });
+
+  test('deliver warms input before clipboard copy', () async {
+    final input = _FakeDesktopInput();
+    final service = _service(input: input, clipboard: _FakeClipboard());
+
+    await service.deliver('warm', PasteMode.normal);
+
+    expect(input.calls.first, 'prepare paste');
+    expect(input.calls[1], 'native clipboard: warm');
+  });
+
+  test('deliver stops when input warm-up fails', () async {
+    final input = _FakeDesktopInput(failPrepare: true);
+    final clipboard = _FakeClipboard();
+    final service = _service(input: input, clipboard: clipboard);
+
+    await expectLater(
+      service.deliver('blocked', PasteMode.normal),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(input.calls, ['prepare paste']);
+    expect(clipboard.text, isNull);
   });
 
   test('copyToClipboard trusts native success without readback', () async {
@@ -64,16 +92,26 @@ TranscriptDeliveryService _service({
 
 final class _FakeDesktopInput implements DesktopInputClient {
   _FakeDesktopInput({
+    this.failPrepare = false,
     this.failNativeClipboard = false,
     this.updateSystemClipboard = true,
     this.failPaste = false,
   });
 
+  final bool failPrepare;
   final bool failNativeClipboard;
   final bool updateSystemClipboard;
   final bool failPaste;
   final List<String> calls = [];
   _FakeClipboard? clipboard;
+
+  @override
+  Future<void> preparePaste() async {
+    calls.add('prepare paste');
+    if (failPrepare) {
+      throw StateError('prepare failed');
+    }
+  }
 
   @override
   Future<void> setClipboardText(String text) async {

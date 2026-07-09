@@ -3,6 +3,6 @@ import 'package:test/test.dart';
 
 void main() {
   test('loads the bundled Rust library', () {
-    expect(DesktopInput.nativeApiVersion, 1);
+    expect(DesktopInput.nativeApiVersion, 2);
   });
 }

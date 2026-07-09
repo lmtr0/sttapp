@@ -1,5 +1,8 @@
+use std::cell::RefCell;
 use std::ffi::{c_char, CStr, CString};
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use enigo::{
     Direction::{Press, Release},
@@ -8,12 +11,31 @@ use enigo::{
 
 const PASTE_MODE_NORMAL: i32 = 0;
 const PASTE_MODE_PLAIN: i32 = 1;
+const DESKTOP_INPUT_INITIALIZE_DELAY_MS: u64 = 50;
 
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
+thread_local! {
+    static DESKTOP_INPUT: RefCell<Option<Enigo>> = const { RefCell::new(None) };
+}
+
 #[no_mangle]
 pub extern "C" fn sttapp_input_api_version() -> i32 {
-    1
+    2
+}
+
+#[no_mangle]
+pub extern "C" fn sttapp_input_prepare() -> bool {
+    match prepare_desktop_input() {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(error) => {
+            set_last_error(error);
+            false
+        }
+    }
 }
 
 #[no_mangle]
@@ -79,10 +101,37 @@ fn paste_mode_from_int(mode: i32) -> Result<PasteMode, String> {
 }
 
 fn paste(mode: PasteMode) -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|error| format!("failed to initialize desktop input: {error}"))?;
     let shortcut = paste_shortcut(mode);
-    chord(&mut enigo, shortcut.modifiers, shortcut.key)
+    with_desktop_input(|enigo| chord(enigo, shortcut.modifiers, shortcut.key))
+}
+
+fn prepare_desktop_input() -> Result<(), String> {
+    with_desktop_input(|_| Ok(()))
+}
+
+fn with_desktop_input<F>(operation: F) -> Result<(), String>
+where
+    F: FnOnce(&mut Enigo) -> Result<(), String>,
+{
+    DESKTOP_INPUT.with(|input| {
+        let mut input = input.borrow_mut();
+        if input.is_none() {
+            let enigo = Enigo::new(&Settings::default())
+                .map_err(|error| format!("failed to initialize desktop input: {error}"))?;
+            *input = Some(enigo);
+            thread::sleep(Duration::from_millis(DESKTOP_INPUT_INITIALIZE_DELAY_MS));
+        }
+
+        let result = operation(
+            input
+                .as_mut()
+                .expect("desktop input is initialized before operation"),
+        );
+        if result.is_err() {
+            *input = None;
+        }
+        result
+    })
 }
 
 unsafe fn set_clipboard_text(text: *const c_char) -> Result<(), String> {
