@@ -19,6 +19,13 @@ final class DesktopInput {
 
   static int get nativeApiVersion => bindings.sttapp_input_api_version();
 
+  static Future<void> prepare() async {
+    final ok = bindings.sttapp_input_prepare();
+    if (!ok) {
+      throw StateError(_lastNativeError());
+    }
+  }
+
   static Future<void> paste(PasteMode mode) async {
     final ok = bindings.sttapp_input_paste(mode.nativeValue);
     if (!ok) {
