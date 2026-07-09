@@ -51,14 +51,18 @@ jobs:
       - name: Install Dart dependencies
         run: flutter pub get
 
-      - name: Analyze
-        run: flutter analyze
+      - name: Analyze app
+        run: flutter analyze --no-pub lib test
 
       - name: Test app
-        run: flutter test
+        run: flutter test --no-pub
 
       - name: Install sttapp_audio dependencies
         run: dart pub get
+        working-directory: packages/sttapp_audio
+
+      - name: Analyze sttapp_audio package
+        run: dart analyze
         working-directory: packages/sttapp_audio
 
       - name: Test sttapp_audio package
@@ -67,6 +71,10 @@ jobs:
 
       - name: Install sttapp_input dependencies
         run: dart pub get
+        working-directory: packages/sttapp_input
+
+      - name: Analyze sttapp_input package
+        run: dart analyze
         working-directory: packages/sttapp_input
 
       - name: Test sttapp_input package
