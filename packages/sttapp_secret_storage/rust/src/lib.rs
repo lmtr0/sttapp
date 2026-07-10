@@ -229,9 +229,9 @@ fn initialize_platform_store() -> keyring_core::Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(target_os = "macos")]
 fn initialize_platform_store() -> keyring_core::Result<()> {
-    keyring_core::set_default_store(apple_native_keyring_store::Store::new()?);
+    keyring_core::set_default_store(apple_native_keyring_store::keychain::Store::new()?);
     Ok(())
 }
 
@@ -241,10 +241,10 @@ fn initialize_platform_store() -> keyring_core::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn initialize_platform_store() -> keyring_core::Result<()> {
     Err(Error::NotSupportedByStore(
-        "sttapp_secret_storage only supports Windows, macOS, iOS, and Linux".to_string(),
+        "sttapp_secret_storage only supports Windows, macOS, and Linux".to_string(),
     ))
 }
 
