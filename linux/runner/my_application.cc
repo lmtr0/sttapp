@@ -240,7 +240,15 @@ MyApplication* my_application_new() {
   g_set_application_name("sttapp");
   ensure_user_desktop_file();
 
+  GApplicationFlags flags = static_cast<GApplicationFlags>(0);
+#ifndef NDEBUG
+  // Debug launches must be able to run beside an installed tray instance with
+  // the same application ID, otherwise `flutter run` exits before VM service
+  // startup and the tool reports that the log reader never started.
+  flags = static_cast<GApplicationFlags>(flags | G_APPLICATION_NON_UNIQUE);
+#endif
+
   return MY_APPLICATION(g_object_new(my_application_get_type(),
-                                     "application-id", APPLICATION_ID,
-                                     nullptr));
+                                     "application-id", APPLICATION_ID, "flags",
+                                     flags, nullptr));
 }

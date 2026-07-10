@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:sttapp_secret_storage/sttapp_secret_storage.dart';
 
 const defaultOpenAiBaseUrl = 'https://api.openai.com/v1';
 const defaultOpenAiModel = '';
@@ -139,13 +139,15 @@ abstract interface class ConfigStore {
 }
 
 final class SecureConfigStore implements ConfigStore {
-  SecureConfigStore([FlutterSecureStorage? storage])
-    : _storage = storage ?? const FlutterSecureStorage();
+  SecureConfigStore([SttappSecretStorage? storage])
+    : _storage = storage ?? const SttappSecretStorage();
 
-  final FlutterSecureStorage _storage;
+  final SttappSecretStorage _storage;
 
   @override
-  Future<String?> read(String key) => _storage.read(key: key);
+  Future<String?> read(String key) {
+    return _storage.read(key: key);
+  }
 
   @override
   Future<void> write(String key, String value) {

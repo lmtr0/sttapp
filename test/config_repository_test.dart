@@ -4,6 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sttapp/services/config_repository.dart';
 
 void main() {
+  test('secure config store can be constructed without touching native storage', () {
+    expect(SecureConfigStore(), isA<SecureConfigStore>());
+  });
+
   test('normalizes base URL and validates required fields', () {
     final config = TranscriptionConfig(
       apiKey: ' key ',

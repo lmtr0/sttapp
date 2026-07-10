@@ -35,8 +35,9 @@ dependencies:
     path: packages/sttapp_audio
   sttapp_input:
     path: packages/sttapp_input
+  sttapp_secret_storage:
+    path: packages/sttapp_secret_storage
 
-  flutter_secure_storage: ^10.3.1
   hotkey_manager: ^0.2.3
   http: ^1.6.0
   http_parser: ^4.1.2
