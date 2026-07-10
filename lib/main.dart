@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/hotkey_service.dart';
+import 'package:sttapp/services/notification_service.dart';
 import 'package:sttapp/services/startup_error_tracker.dart';
 import 'package:sttapp/services/transcript_delivery_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
@@ -56,6 +57,7 @@ class SttApp extends StatelessWidget {
     this.transcriptionService,
     this.transcriptDeliveryService,
     this.hotkeyService,
+    this.notificationService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -64,6 +66,7 @@ class SttApp extends StatelessWidget {
   final TranscriptionService? transcriptionService;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
+  final NotificationService? notificationService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -81,6 +84,7 @@ class SttApp extends StatelessWidget {
         transcriptionService: transcriptionService,
         transcriptDeliveryService: transcriptDeliveryService,
         hotkeyService: hotkeyService,
+        notificationService: notificationService,
         supportsShortcutSettings: supportsShortcutSettings,
         initializePlatformServices: initializePlatformServices,
       ),
@@ -95,6 +99,7 @@ class RecorderHome extends StatefulWidget {
     this.transcriptionService,
     this.transcriptDeliveryService,
     this.hotkeyService,
+    this.notificationService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -103,6 +108,7 @@ class RecorderHome extends StatefulWidget {
   final TranscriptionService? transcriptionService;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
+  final NotificationService? notificationService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -119,6 +125,7 @@ class _RecorderHomeState extends State<RecorderHome>
   late final TranscriptionService _transcriptionService;
   late final TranscriptDeliveryService _transcriptDeliveryService;
   late final HotkeyService _hotkeyService;
+  late final NotificationService _notificationService;
   late final bool _ownsTranscriptionService;
   late final bool _supportsShortcutSettings;
   late final bool _initializePlatformServices;
@@ -140,6 +147,7 @@ class _RecorderHomeState extends State<RecorderHome>
   String? _modelsLoadedForEndpoint;
   bool _showSettings = false;
   bool _showApiKey = false;
+  bool _notificationsEnabled = true;
   bool _isTestingConnection = false;
   bool _isLoadingModels = false;
   bool _isQuitting = false;
@@ -160,10 +168,15 @@ class _RecorderHomeState extends State<RecorderHome>
     _transcriptDeliveryService =
         widget.transcriptDeliveryService ?? const TranscriptDeliveryService();
     _hotkeyService = widget.hotkeyService ?? HotkeyService();
+    _initializePlatformServices = widget.initializePlatformServices;
+    _notificationService =
+        widget.notificationService ??
+        (_initializePlatformServices
+            ? SystemNotificationService()
+            : const NoopNotificationService());
     _ownsTranscriptionService = widget.transcriptionService == null;
     _supportsShortcutSettings =
         widget.supportsShortcutSettings ?? !Platform.isLinux;
-    _initializePlatformServices = widget.initializePlatformServices;
     if (_initializePlatformServices) {
       trayManager.addListener(this);
       windowManager.addListener(this);
@@ -178,6 +191,7 @@ class _RecorderHomeState extends State<RecorderHome>
       windowManager.removeListener(this);
     }
     unawaited(_hotkeyService.dispose());
+    unawaited(_notificationService.dispose());
     if (_ownsTranscriptionService) {
       _transcriptionService.close();
     }
@@ -192,6 +206,7 @@ class _RecorderHomeState extends State<RecorderHome>
     if (_initializePlatformServices) {
       await _initTray();
     }
+    await _notificationService.initialize();
     await _loadConfig();
     if (!_initializePlatformServices) {
       return;
@@ -220,6 +235,8 @@ class _RecorderHomeState extends State<RecorderHome>
     try {
       final config = await _configRepository.load();
       final shortcutConfig = await _configRepository.loadShortcutConfig();
+      final notificationConfig = await _configRepository
+          .loadNotificationConfig();
       if (!mounted) {
         return;
       }
@@ -234,6 +251,7 @@ class _RecorderHomeState extends State<RecorderHome>
       setState(() {
         _config = config;
         _shortcutConfig = shortcutConfig;
+        _notificationsEnabled = notificationConfig.enabled;
         _showSettings = !configIsValid;
         _state = configIsValid
             ? RecorderState.ready
@@ -363,6 +381,9 @@ class _RecorderHomeState extends State<RecorderHome>
     AudioClip? clip;
     try {
       clip = await recording.stop();
+      if (_notificationsEnabled) {
+        unawaited(_notificationService.showRecordingFinishedTranscribing());
+      }
       final transcript = await _transcriptionService.transcribe(clip, config);
       if (!mounted) {
         return;
@@ -415,6 +436,9 @@ class _RecorderHomeState extends State<RecorderHome>
     try {
       config.validate();
       await _configRepository.save(config);
+      await _configRepository.saveNotificationConfig(
+        NotificationConfig(enabled: _notificationsEnabled),
+      );
       if (_supportsShortcutSettings) {
         await _configRepository.saveShortcutConfig(_shortcutConfig);
         if (_initializePlatformServices) {
@@ -880,6 +904,18 @@ class _RecorderHomeState extends State<RecorderHome>
             ],
           ),
         ],
+        const SizedBox(height: 20),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('System notifications'),
+          value: _notificationsEnabled,
+          onChanged: (value) {
+            setState(() {
+              _notificationsEnabled = value;
+              _settingsStatus = null;
+            });
+          },
+        ),
         if (_settingsStatus != null) ...[
           const SizedBox(height: 16),
           Text(

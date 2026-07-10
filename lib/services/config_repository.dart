@@ -62,6 +62,12 @@ final class ShortcutConfig {
   }
 }
 
+final class NotificationConfig {
+  const NotificationConfig({this.enabled = true});
+
+  final bool enabled;
+}
+
 final class TranscriptionConfig {
   TranscriptionConfig({
     required String apiKey,
@@ -167,6 +173,7 @@ final class ConfigRepository {
   static const _baseUrlKey = 'openai_base_url';
   static const _modelKey = 'openai_model';
   static const _shortcutKeyIdKey = 'shortcut_key_id';
+  static const _notificationsEnabledKey = 'notifications_enabled';
 
   final ConfigStore _store;
   final Map<String, String> _environment;
@@ -211,6 +218,19 @@ final class ConfigRepository {
 
   Future<void> saveShortcutConfig(ShortcutConfig config) {
     return _store.write(_shortcutKeyIdKey, config.keyId);
+  }
+
+  Future<NotificationConfig> loadNotificationConfig() async {
+    return NotificationConfig(
+      enabled: _parseBool(
+        await _store.read(_notificationsEnabledKey),
+        defaultValue: true,
+      ),
+    );
+  }
+
+  Future<void> saveNotificationConfig(NotificationConfig config) {
+    return _store.write(_notificationsEnabledKey, config.enabled.toString());
   }
 
   Future<void> migrateLegacyTauriConfigIfNeeded() async {
@@ -305,6 +325,14 @@ final class ConfigRepository {
 
   static String _legacyString(Object? value) {
     return value is String ? value.trim() : '';
+  }
+
+  static bool _parseBool(String? value, {required bool defaultValue}) {
+    return switch (value?.trim().toLowerCase()) {
+      'true' => true,
+      'false' => false,
+      _ => defaultValue,
+    };
   }
 }
 
