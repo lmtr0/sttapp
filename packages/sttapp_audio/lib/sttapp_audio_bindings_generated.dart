@@ -53,6 +53,13 @@ external ffi.Pointer<ffi.Void> sttapp_audio_clip_to_flac(
   ffi.Pointer<ffi.Void> clip,
 );
 
+@ffi.Native<ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>)>(
+  assetId: _assetId,
+)
+external ffi.Pointer<ffi.Void> sttapp_audio_clip_to_flac_16khz_mono(
+  ffi.Pointer<ffi.Void> clip,
+);
+
 @ffi.Native<ffi.Uint64 Function(ffi.Pointer<ffi.Void>)>(assetId: _assetId)
 external int sttapp_audio_encoded_audio_len(ffi.Pointer<ffi.Void> encoded);
 

@@ -4,9 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sttapp/services/config_repository.dart';
 
 void main() {
-  test('secure config store can be constructed without touching native storage', () {
-    expect(SecureConfigStore(), isA<SecureConfigStore>());
-  });
+  test(
+    'secure config store can be constructed without touching native storage',
+    () {
+      expect(SecureConfigStore(), isA<SecureConfigStore>());
+    },
+  );
 
   test('normalizes base URL and validates required fields', () {
     final config = TranscriptionConfig(
@@ -35,6 +38,46 @@ void main() {
 
     expect(config.validateEndpoint, returnsNormally);
     expect(config.validate, throwsA(isA<ConfigException>()));
+  });
+
+  test('Groq endpoint detection accepts api.groq.com', () {
+    final config = TranscriptionConfig(
+      apiKey: 'key',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      model: 'model',
+    );
+
+    expect(config.isGroqEndpoint, isTrue);
+  });
+
+  test('Groq endpoint detection accepts groq.com subdomains', () {
+    final config = TranscriptionConfig(
+      apiKey: 'key',
+      baseUrl: 'https://speech.groq.com/openai/v1',
+      model: 'model',
+    );
+
+    expect(config.isGroqEndpoint, isTrue);
+  });
+
+  test('Groq endpoint detection rejects OpenAI endpoint', () {
+    final config = TranscriptionConfig(
+      apiKey: 'key',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'model',
+    );
+
+    expect(config.isGroqEndpoint, isFalse);
+  });
+
+  test('Groq endpoint detection rejects lookalike proxy hosts', () {
+    final config = TranscriptionConfig(
+      apiKey: 'key',
+      baseUrl: 'https://mygroq.example/v1',
+      model: 'model',
+    );
+
+    expect(config.isGroqEndpoint, isFalse);
   });
 
   test('loads environment fallback when secure storage is empty', () async {

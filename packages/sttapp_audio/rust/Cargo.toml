@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 [dependencies]
 flacenc = { version = "0.5.1", default-features = false }
 rodio = { version = "0.22", default-features = false, features = ["recording"] }
+rubato = { version = "4.0.0", default-features = true }
