@@ -1,16 +1,21 @@
 # sttapp
 
-System-wide speech-to-text desktop app built with Flutter.
+System-wide speech-to-text desktop app built with Flutter and rust pluggins. (Currently only tested in Fedora)
 
 sttapp records audio, transcribes it with an OpenAI-compatible API, copies the transcript to the clipboard, and can paste it into the active application. The app supports global shortcuts, tray controls, and local settings storage.
 
-## Requirements
+Recommendation to use Groq's `Whisper 3 large turbo` for the best experience.
+
+## Pre-built Binaries
+Take a look [here](https://github.com/lmtr0/sttapp/releases)
+
+## Building from source
 
 - Flutter stable
 - Dart SDK from Flutter
 - Rust stable
 - Platform desktop build tools:
-  - Linux: `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libkeybinder-3.0-dev`, `libasound2-dev`
+  - Linux: `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libkeybinder-3.0-dev`, `libasound2-dev`, `cargo`
   - macOS: Xcode command line tools
   - Windows: Visual Studio C++ build tools
 - Linux runtime secret storage requires an available and unlocked Secret Service provider such as GNOME Keyring or KWallet.
@@ -21,19 +26,6 @@ Install dependencies:
 
 ```bash
 flutter pub get
-```
-
-Run checks:
-
-```bash
-flutter analyze
-flutter test
-(cd packages/sttapp_audio && dart test)
-(cd packages/sttapp_input && dart test)
-(cd packages/sttapp_secret_storage && dart test)
-cargo test --locked --manifest-path packages/sttapp_audio/rust/Cargo.toml
-cargo test --locked --manifest-path packages/sttapp_input/rust/Cargo.toml
-cargo test --locked --manifest-path packages/sttapp_secret_storage/rust/Cargo.toml
 ```
 
 Run the desktop app:
@@ -57,5 +49,6 @@ flutter build windows --release
 - `lib/` contains the Flutter app.
 - `packages/sttapp_audio/` contains the native audio and FLAC package.
 - `packages/sttapp_input/` contains native input and paste helpers.
+- - `packages/sttapp_secret_store/` contains native secret store implementation helpers.
 - `linux/`, `macos/`, and `windows/` contain desktop platform runners.
 - `.github/workflows/` contains CI and release publishing workflows.
