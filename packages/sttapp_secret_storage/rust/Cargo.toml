@@ -1,0 +1,21 @@
+[package]
+name = "sttapp-secret-storage"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "sttapp_secret_storage"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+keyring-core = "1.0.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1.0"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = "1.0.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.0", features = ["crypto-rust"] }

@@ -10,9 +10,10 @@ sttapp records audio, transcribes it with an OpenAI-compatible API, copies the t
 - Dart SDK from Flutter
 - Rust stable
 - Platform desktop build tools:
-  - Linux: `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libkeybinder-3.0-dev`, `libsecret-1-dev`, `libasound2-dev`
+  - Linux: `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `libkeybinder-3.0-dev`, `libasound2-dev`
   - macOS: Xcode command line tools
   - Windows: Visual Studio C++ build tools
+- Linux runtime secret storage requires an available and unlocked Secret Service provider such as GNOME Keyring or KWallet.
 
 ## Development
 
@@ -29,8 +30,10 @@ flutter analyze
 flutter test
 (cd packages/sttapp_audio && dart test)
 (cd packages/sttapp_input && dart test)
+(cd packages/sttapp_secret_storage && dart test)
 cargo test --locked --manifest-path packages/sttapp_audio/rust/Cargo.toml
 cargo test --locked --manifest-path packages/sttapp_input/rust/Cargo.toml
+cargo test --locked --manifest-path packages/sttapp_secret_storage/rust/Cargo.toml
 ```
 
 Run the desktop app:
