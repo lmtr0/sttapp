@@ -84,6 +84,15 @@ final class TranscriptionConfig {
   bool get isComplete =>
       apiKey.isNotEmpty && baseUrl.isNotEmpty && model.isNotEmpty;
 
+  bool get isGroqEndpoint {
+    final uri = Uri.tryParse(baseUrl);
+    final host = uri?.host.toLowerCase();
+    if (host == null) {
+      return false;
+    }
+    return host == 'api.groq.com' || host.endsWith('.groq.com');
+  }
+
   Uri get transcriptionsUri => Uri.parse('$baseUrl/audio/transcriptions');
 
   Uri get modelsUri => Uri.parse('$baseUrl/models');

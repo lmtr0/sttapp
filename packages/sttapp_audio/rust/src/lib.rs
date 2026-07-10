@@ -8,12 +8,16 @@ use std::time::{Duration, Instant};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use rodio::microphone::MicrophoneBuilder;
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, FixedSync, Resampler};
 
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+const TRANSCRIPTION_SAMPLE_RATE: usize = 16_000;
+const TRANSCRIPTION_CHANNELS: usize = 1;
 
 #[no_mangle]
 pub extern "C" fn sttapp_audio_api_version() -> i32 {
-    3
+    4
 }
 
 #[no_mangle]
@@ -119,6 +123,27 @@ pub extern "C" fn sttapp_audio_clip_to_flac(clip: *const AudioClip) -> *mut Enco
     };
 
     match clip.to_flac_bytes() {
+        Ok(bytes) => {
+            clear_last_error();
+            Box::into_raw(Box::new(EncodedAudio { bytes }))
+        }
+        Err(error) => {
+            set_last_error(error);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sttapp_audio_clip_to_flac_16khz_mono(
+    clip: *const AudioClip,
+) -> *mut EncodedAudio {
+    let Some(clip) = (unsafe { clip.as_ref() }) else {
+        set_last_error("audio clip handle is null");
+        return ptr::null_mut();
+    };
+
+    match clip.to_flac_16khz_mono_bytes() {
         Ok(bytes) => {
             clear_last_error();
             Box::into_raw(Box::new(EncodedAudio { bytes }))
@@ -265,6 +290,30 @@ pub struct EncodedAudio {
 
 impl AudioClip {
     fn to_flac_bytes(&self) -> Result<Vec<u8>, String> {
+        let metadata = self.validate_for_encoding()?;
+
+        let samples = self
+            .samples
+            .iter()
+            .map(|sample| i32::from(*sample))
+            .collect::<Vec<_>>();
+        encode_flac_samples(&samples, metadata.channels, metadata.sample_rate)
+    }
+
+    fn to_flac_16khz_mono_bytes(&self) -> Result<Vec<u8>, String> {
+        let metadata = self.validate_for_encoding()?;
+        let mono = downmix_to_mono_f32(&self.samples, metadata.channels);
+        let resampled = resample_mono_to_transcription_rate(&mono, metadata.sample_rate)?;
+        let samples = resampled
+            .into_iter()
+            .map(f32_to_i16_sample)
+            .map(i32::from)
+            .collect::<Vec<_>>();
+
+        encode_flac_samples(&samples, TRANSCRIPTION_CHANNELS, TRANSCRIPTION_SAMPLE_RATE)
+    }
+
+    fn validate_for_encoding(&self) -> Result<AudioClipMetadata, String> {
         if self.channels == 0 {
             return Err("audio clip has invalid channel count".to_string());
         }
@@ -274,17 +323,66 @@ impl AudioClip {
         if self.samples.is_empty() {
             return Err("audio clip has no samples".to_string());
         }
-        if self.samples.len() % self.channels as usize != 0 {
+
+        let channels = self.channels as usize;
+        if self.samples.len() % channels != 0 {
             return Err("audio clip samples are not aligned to channel count".to_string());
         }
 
-        let samples = self
-            .samples
-            .iter()
-            .map(|sample| i32::from(*sample))
-            .collect::<Vec<_>>();
-        encode_flac_samples(&samples, self.channels as usize, self.sample_rate as usize)
+        Ok(AudioClipMetadata {
+            channels,
+            sample_rate: self.sample_rate as usize,
+        })
     }
+}
+
+struct AudioClipMetadata {
+    channels: usize,
+    sample_rate: usize,
+}
+
+fn downmix_to_mono_f32(samples: &[i16], channels: usize) -> Vec<f32> {
+    if channels == TRANSCRIPTION_CHANNELS {
+        return samples.iter().map(|sample| *sample as f32).collect();
+    }
+
+    samples
+        .chunks_exact(channels)
+        .map(|frame| {
+            let sum = frame.iter().map(|sample| *sample as f32).sum::<f32>();
+            sum / channels as f32
+        })
+        .collect()
+}
+
+fn resample_mono_to_transcription_rate(
+    samples: &[f32],
+    sample_rate: usize,
+) -> Result<Vec<f32>, String> {
+    if sample_rate == TRANSCRIPTION_SAMPLE_RATE {
+        return Ok(samples.to_vec());
+    }
+
+    let input_frames = samples.len();
+    let input = InterleavedSlice::new(samples, TRANSCRIPTION_CHANNELS, input_frames)
+        .map_err(|error| format!("failed to prepare resampler input buffer: {error}"))?;
+    let mut resampler = Fft::<f32>::new(
+        sample_rate,
+        TRANSCRIPTION_SAMPLE_RATE,
+        1024,
+        TRANSCRIPTION_CHANNELS,
+        FixedSync::Input,
+    )
+    .map_err(|error| format!("failed to create 16 kHz mono resampler: {error}"))?;
+    let output = resampler
+        .process_all(&input, input_frames, None)
+        .map_err(|error| format!("failed to resample audio to 16 kHz mono: {error}"))?;
+
+    Ok(output.take_data())
+}
+
+fn f32_to_i16_sample(sample: f32) -> i16 {
+    sample.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
 fn encode_flac_samples(
@@ -413,6 +511,99 @@ mod tests {
             unaligned.to_flac_bytes().unwrap_err(),
             "audio clip samples are not aligned to channel count"
         );
+    }
+
+    #[test]
+    fn optimized_flac_encoding_preserves_16khz_mono_stream_metadata() {
+        let clip = AudioClip {
+            samples: vec![0; 8192],
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        let encoded = clip
+            .to_flac_16khz_mono_bytes()
+            .expect("optimized FLAC encoding should work");
+        let (sample_rate, channels, bits_per_sample) = read_flac_stream_info(&encoded);
+
+        assert_eq!(sample_rate, 16_000);
+        assert_eq!(channels, 1);
+        assert_eq!(bits_per_sample, 16);
+    }
+
+    #[test]
+    fn optimized_flac_encoding_downmixes_and_resamples_stereo_48khz() {
+        let samples = (0..48_000)
+            .flat_map(|frame| {
+                let left = ((frame % 256) as i16) * 32;
+                let right = -left;
+                [left, right]
+            })
+            .collect::<Vec<_>>();
+        let clip = AudioClip {
+            samples,
+            sample_rate: 48_000,
+            channels: 2,
+        };
+
+        let encoded = clip
+            .to_flac_16khz_mono_bytes()
+            .expect("optimized FLAC encoding should work");
+        let (sample_rate, channels, bits_per_sample) = read_flac_stream_info(&encoded);
+
+        assert_eq!(sample_rate, 16_000);
+        assert_eq!(channels, 1);
+        assert_eq!(bits_per_sample, 16);
+    }
+
+    #[test]
+    fn optimized_flac_encoding_rejects_invalid_clips() {
+        let empty = AudioClip {
+            samples: Vec::new(),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+        let bad_channels = AudioClip {
+            samples: vec![0; 64],
+            sample_rate: 16_000,
+            channels: 0,
+        };
+        let bad_sample_rate = AudioClip {
+            samples: vec![0; 64],
+            sample_rate: 0,
+            channels: 1,
+        };
+        let unaligned = AudioClip {
+            samples: vec![0; 65],
+            sample_rate: 16_000,
+            channels: 2,
+        };
+
+        assert_eq!(
+            empty.to_flac_16khz_mono_bytes().unwrap_err(),
+            "audio clip has no samples"
+        );
+        assert_eq!(
+            bad_channels.to_flac_16khz_mono_bytes().unwrap_err(),
+            "audio clip has invalid channel count"
+        );
+        assert_eq!(
+            bad_sample_rate.to_flac_16khz_mono_bytes().unwrap_err(),
+            "audio clip has invalid sample rate"
+        );
+        assert_eq!(
+            unaligned.to_flac_16khz_mono_bytes().unwrap_err(),
+            "audio clip samples are not aligned to channel count"
+        );
+    }
+
+    #[test]
+    fn downmix_to_mono_averages_stereo_frames() {
+        let samples = [1000, -500, -1000, 500, 100, 300];
+
+        let mono = downmix_to_mono_f32(&samples, 2);
+
+        assert_eq!(mono, vec![250.0, -250.0, 200.0]);
     }
 
     fn read_flac_stream_info(bytes: &[u8]) -> (u32, u8, u8) {

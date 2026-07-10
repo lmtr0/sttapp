@@ -13,7 +13,9 @@ final class TranscriptionService {
   final http.Client _client;
 
   Future<String> transcribe(AudioClip clip, TranscriptionConfig config) async {
-    final bytes = await clip.toFlacBytes();
+    final bytes = config.isGroqEndpoint
+        ? await clip.toGroqOptimizedFlacBytes()
+        : await clip.toFlacBytes();
     return transcribeFlacBytes(bytes, config);
   }
 

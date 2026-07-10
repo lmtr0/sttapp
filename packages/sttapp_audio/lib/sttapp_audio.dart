@@ -126,6 +126,27 @@ final class AudioClip {
     }
   }
 
+  Future<Uint8List> toGroqOptimizedFlacBytes() async {
+    _checkOpen();
+    final encoded = bindings.sttapp_audio_clip_to_flac_16khz_mono(_handle);
+    if (encoded == ffi.nullptr) {
+      throw StateError(_lastNativeError());
+    }
+
+    try {
+      final length = bindings.sttapp_audio_encoded_audio_len(encoded);
+      final data = bindings.sttapp_audio_encoded_audio_data(encoded);
+      if (data == ffi.nullptr && length > 0) {
+        throw StateError(
+          'Native optimized FLAC encoder returned a null byte buffer.',
+        );
+      }
+      return Uint8List.fromList(data.asTypedList(length));
+    } finally {
+      bindings.sttapp_audio_encoded_audio_free(encoded);
+    }
+  }
+
   void dispose() {
     if (_disposed) {
       return;
