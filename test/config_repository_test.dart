@@ -127,6 +127,56 @@ void main() {
     expect(await store.read('shortcut_key_id'), 'f10');
   });
 
+  test('loads default notification config when storage is empty', () async {
+    final repository = ConfigRepository(
+      store: MemoryConfigStore(),
+      environment: const {},
+    );
+
+    final config = await repository.loadNotificationConfig();
+
+    expect(config.enabled, isTrue);
+  });
+
+  test('loads disabled notification config from storage', () async {
+    final repository = ConfigRepository(
+      store: MemoryConfigStore({'notifications_enabled': 'false'}),
+      environment: const {},
+    );
+
+    final config = await repository.loadNotificationConfig();
+
+    expect(config.enabled, isFalse);
+  });
+
+  test('invalid notification config falls back to enabled', () async {
+    final repository = ConfigRepository(
+      store: MemoryConfigStore({'notifications_enabled': 'not-a-bool'}),
+      environment: const {},
+    );
+
+    final config = await repository.loadNotificationConfig();
+
+    expect(config.enabled, isTrue);
+  });
+
+  test('saves notification config', () async {
+    final store = MemoryConfigStore();
+    final repository = ConfigRepository(store: store, environment: const {});
+
+    await repository.saveNotificationConfig(
+      const NotificationConfig(enabled: false),
+    );
+
+    expect(await store.read('notifications_enabled'), 'false');
+
+    await repository.saveNotificationConfig(
+      const NotificationConfig(enabled: true),
+    );
+
+    expect(await store.read('notifications_enabled'), 'true');
+  });
+
   test('migrates legacy Tauri config when Flutter config is empty', () async {
     final directory = await Directory.systemTemp.createTemp('sttapp-test-');
     addTearDown(() => directory.delete(recursive: true));
