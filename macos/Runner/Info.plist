@@ -27,7 +27,7 @@
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>sttapp records microphone audio when capture is started from the tray.</string>
+	<string>sttapp records microphone audio only when you start a transcription.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

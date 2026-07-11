@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:sttapp/main.dart';
 import 'package:sttapp/services/config_repository.dart';
+import 'package:sttapp/services/desktop_permission_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
 
 void main() {
@@ -106,6 +107,121 @@ void main() {
     expect(find.text('gpt-4o-mini-transcribe'), findsOneWidget);
     expect(find.text('Manual model'), findsOneWidget);
   });
+
+  testWidgets('macOS setup stays open while permissions are missing', (
+    tester,
+  ) async {
+    final permissions = _FakeDesktopPermissionService(
+      const DesktopPermissionSnapshot(
+        microphone: DesktopPermissionState.notDetermined,
+        accessibility: DesktopPermissionState.denied,
+      ),
+    );
+    await tester.pumpWidget(
+      SttApp(
+        configRepository: _validConfigRepository(),
+        desktopPermissionService: permissions,
+        initializePlatformServices: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('macOS permissions'), findsOneWidget);
+    expect(find.text('Microphone'), findsOneWidget);
+    expect(find.text('Accessibility'), findsOneWidget);
+    final closeButton = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.close),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(closeButton.onPressed, isNull);
+  });
+
+  testWidgets('grant actions refresh permission setup state', (tester) async {
+    final permissions = _FakeDesktopPermissionService(
+      const DesktopPermissionSnapshot(
+        microphone: DesktopPermissionState.notDetermined,
+        accessibility: DesktopPermissionState.denied,
+      ),
+    );
+    await tester.pumpWidget(
+      SttApp(
+        configRepository: _validConfigRepository(),
+        desktopPermissionService: permissions,
+        initializePlatformServices: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Grant').first);
+    await tester.pumpAndSettle();
+    expect(permissions.requested, [DesktopPermission.microphone]);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Grant').first);
+    await tester.pumpAndSettle();
+    expect(permissions.requested, [
+      DesktopPermission.microphone,
+      DesktopPermission.accessibility,
+    ]);
+    final closeButton = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.close),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(closeButton.onPressed, isNotNull);
+  });
+}
+
+ConfigRepository _validConfigRepository() {
+  return ConfigRepository(
+    store: MemoryConfigStore({
+      'openai_api_key': 'key',
+      'openai_base_url': defaultOpenAiBaseUrl,
+      'openai_model': 'gpt-4o-transcribe',
+    }),
+    environment: const {},
+  );
+}
+
+final class _FakeDesktopPermissionService implements DesktopPermissionService {
+  _FakeDesktopPermissionService(this.status);
+
+  DesktopPermissionSnapshot status;
+  final List<DesktopPermission> requested = [];
+  final List<DesktopPermission> openedSettings = [];
+
+  @override
+  bool get requiresAuthorization => true;
+
+  @override
+  Future<DesktopPermissionSnapshot> getStatus() async => status;
+
+  @override
+  Future<void> openSettings(DesktopPermission permission) async {
+    openedSettings.add(permission);
+  }
+
+  @override
+  Future<DesktopPermissionSnapshot> requestAccessibility() async {
+    requested.add(DesktopPermission.accessibility);
+    status = DesktopPermissionSnapshot(
+      microphone: status.microphone,
+      accessibility: DesktopPermissionState.authorized,
+    );
+    return status;
+  }
+
+  @override
+  Future<DesktopPermissionSnapshot> requestMicrophone() async {
+    requested.add(DesktopPermission.microphone);
+    status = DesktopPermissionSnapshot(
+      microphone: DesktopPermissionState.authorized,
+      accessibility: status.accessibility,
+    );
+    return status;
+  }
 }
 
 final class _ModelsClient extends http.BaseClient {

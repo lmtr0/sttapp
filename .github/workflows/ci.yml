@@ -114,3 +114,64 @@ jobs:
       - name: Test ${{ matrix.package }}
         run: cargo test --locked
         working-directory: packages/${{ matrix.package }}/rust
+
+  macos:
+    name: macOS universal build
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Run Flutter tests
+        run: flutter test --no-pub
+
+      - name: Run macOS runner tests
+        run: >
+          xcodebuild test
+          -workspace macos/Runner.xcworkspace
+          -scheme Runner
+          -configuration Debug
+          -destination 'platform=macOS'
+
+      - name: Build universal macOS app
+        run: flutter build macos --release --no-pub
+
+      - name: Verify Mach-O slices and signatures
+        shell: bash
+        run: |
+          app="build/macos/Build/Products/Release/sttapp.app"
+          found_macho=0
+
+          while IFS= read -r -d '' binary; do
+            if ! file "${binary}" | grep -q 'Mach-O'; then
+              continue
+            fi
+
+            found_macho=1
+            archs="$(lipo -archs "${binary}")"
+            case " ${archs} " in
+              *" arm64 "*) ;;
+              *) echo "Missing arm64 slice: ${binary} (${archs})" >&2; exit 1 ;;
+            esac
+            case " ${archs} " in
+              *" x86_64 "*) ;;
+              *) echo "Missing x86_64 slice: ${binary} (${archs})" >&2; exit 1 ;;
+            esac
+          done < <(find "${app}" -type f -print0)
+
+          test "${found_macho}" -eq 1
+          codesign --verify --deep --strict "${app}"

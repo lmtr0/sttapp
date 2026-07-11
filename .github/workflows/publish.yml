@@ -69,12 +69,12 @@ jobs:
             flutter_target: windows
             archive_extension: zip
             archive_source: build/windows/x64/runner/Release
-          - artifact_name: sttapp-macos-x64
+          - artifact_name: sttapp-macos-universal
             runner: macos-15-intel
             platform: macos
             rust_target: x86_64-apple-darwin
             flutter_target: macos
-            archive_extension: zip
+            archive_extension: dmg
             archive_source: build/macos/Build/Products/Release/sttapp.app
 
     env:
@@ -183,6 +183,37 @@ jobs:
           SH
           chmod +x "${bundle_dir}/sttapp"
 
+      - name: Verify universal macOS application
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          app="${{ matrix.archive_source }}"
+          found_macho=0
+
+          while IFS= read -r -d '' binary; do
+            if ! file "${binary}" | grep -q 'Mach-O'; then
+              continue
+            fi
+
+            found_macho=1
+            archs="$(lipo -archs "${binary}")"
+            case " ${archs} " in
+              *" arm64 "*) ;;
+              *) echo "Missing arm64 slice: ${binary} (${archs})" >&2; exit 1 ;;
+            esac
+            case " ${archs} " in
+              *" x86_64 "*) ;;
+              *) echo "Missing x86_64 slice: ${binary} (${archs})" >&2; exit 1 ;;
+            esac
+          done < <(find "${app}" -type f -print0)
+
+          if [ "${found_macho}" -ne 1 ]; then
+            echo "No Mach-O binaries found in ${app}." >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict "${app}"
+
       - name: Archive Linux bundle
         if: matrix.platform == 'linux'
         shell: bash
@@ -224,7 +255,17 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           archive="${{ matrix.artifact_name }}-${{ needs.validate.outputs.tag }}.${{ matrix.archive_extension }}"
-          ditto -c -k --sequesterRsrc --keepParent "${{ matrix.archive_source }}" "${archive}"
+          staging="macos-dmg"
+          rm -rf "${staging}"
+          mkdir -p "${staging}"
+          ditto "${{ matrix.archive_source }}" "${staging}/sttapp.app"
+          ln -s /Applications "${staging}/Applications"
+          hdiutil create \
+            -volname sttapp \
+            -srcfolder "${staging}" \
+            -ov \
+            -format UDZO \
+            "${archive}"
           echo "archive_path=${archive}" >> "${GITHUB_ENV}"
 
       - name: Upload artifact
@@ -253,7 +294,14 @@ jobs:
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
           name: sttapp ${{ needs.validate.outputs.tag }}
-          body: See the assets to download this version and install.
+          body: |
+            Download the archive for your platform and install it.
+
+            The macOS DMG is a universal Intel and Apple Silicon build. It is
+            not Developer ID signed or notarized, so the first launch requires
+            approval through Finder > Open or System Settings > Privacy &
+            Security > Open Anyway. macOS will then request Microphone and
+            Accessibility access inside the app's setup window.
           draft: true
           prerelease: false
           files: release-assets/*

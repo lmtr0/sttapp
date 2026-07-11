@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:sttapp/services/config_repository.dart';
+import 'package:sttapp/services/desktop_permission_service.dart';
 import 'package:sttapp/services/hotkey_service.dart';
 import 'package:sttapp/services/startup_error_tracker.dart';
 import 'package:sttapp/services/transcript_delivery_service.dart';
@@ -13,7 +14,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 const _recorderWindowSize = Size(400, 120);
-const _settingsWindowSize = Size(460, 560);
+const _settingsWindowSize = Size(520, 720);
 const _trayDefaultPng = 'assets/tray/tray_default.png';
 const _trayRecordingPng = 'assets/tray/tray_recording.png';
 const _trayDefaultIco = 'assets/tray/tray_default.ico';
@@ -56,6 +57,7 @@ class SttApp extends StatelessWidget {
     this.transcriptionService,
     this.transcriptDeliveryService,
     this.hotkeyService,
+    this.desktopPermissionService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -64,6 +66,7 @@ class SttApp extends StatelessWidget {
   final TranscriptionService? transcriptionService;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
+  final DesktopPermissionService? desktopPermissionService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -81,6 +84,7 @@ class SttApp extends StatelessWidget {
         transcriptionService: transcriptionService,
         transcriptDeliveryService: transcriptDeliveryService,
         hotkeyService: hotkeyService,
+        desktopPermissionService: desktopPermissionService,
         supportsShortcutSettings: supportsShortcutSettings,
         initializePlatformServices: initializePlatformServices,
       ),
@@ -95,6 +99,7 @@ class RecorderHome extends StatefulWidget {
     this.transcriptionService,
     this.transcriptDeliveryService,
     this.hotkeyService,
+    this.desktopPermissionService,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -103,6 +108,7 @@ class RecorderHome extends StatefulWidget {
   final TranscriptionService? transcriptionService;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
+  final DesktopPermissionService? desktopPermissionService;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -113,12 +119,13 @@ class RecorderHome extends StatefulWidget {
 enum RecorderState { ready, needsConfig, recording, transcribing, done, error }
 
 class _RecorderHomeState extends State<RecorderHome>
-    with TrayListener, WindowListener {
+    with TrayListener, WindowListener, WidgetsBindingObserver {
   late final AudioRecorder _recorder;
   late final ConfigRepository _configRepository;
   late final TranscriptionService _transcriptionService;
   late final TranscriptDeliveryService _transcriptDeliveryService;
   late final HotkeyService _hotkeyService;
+  late final DesktopPermissionService _desktopPermissionService;
   late final bool _ownsTranscriptionService;
   late final bool _supportsShortcutSettings;
   late final bool _initializePlatformServices;
@@ -143,6 +150,14 @@ class _RecorderHomeState extends State<RecorderHome>
   bool _isTestingConnection = false;
   bool _isLoadingModels = false;
   bool _isQuitting = false;
+  bool _isPermissionActionPending = false;
+  bool _isRefreshingPermissions = false;
+  bool _permissionStatusLoaded = false;
+  bool _inputServicesInitialized = false;
+  bool _inputServicesInitializing = false;
+  String? _permissionError;
+  DesktopPermissionSnapshot _permissionStatus =
+      const DesktopPermissionSnapshot.authorized();
 
   bool get _isRecording => _recording != null;
 
@@ -150,9 +165,16 @@ class _RecorderHomeState extends State<RecorderHome>
 
   bool get _canStart => !_isRecording && !_isTranscribing;
 
+  bool get _requiresDesktopPermissions =>
+      _desktopPermissionService.requiresAuthorization;
+
+  bool get _permissionsAuthorized =>
+      !_requiresDesktopPermissions || _permissionStatus.isAuthorized;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _recorder = AudioRecorder();
     _configRepository = widget.configRepository ?? ConfigRepository();
     _transcriptionService =
@@ -160,6 +182,11 @@ class _RecorderHomeState extends State<RecorderHome>
     _transcriptDeliveryService =
         widget.transcriptDeliveryService ?? const TranscriptDeliveryService();
     _hotkeyService = widget.hotkeyService ?? HotkeyService();
+    _desktopPermissionService =
+        widget.desktopPermissionService ?? defaultDesktopPermissionService();
+    if (_desktopPermissionService.requiresAuthorization) {
+      _permissionStatus = const DesktopPermissionSnapshot.unavailable();
+    }
     _ownsTranscriptionService = widget.transcriptionService == null;
     _supportsShortcutSettings =
         widget.supportsShortcutSettings ?? !Platform.isLinux;
@@ -173,6 +200,7 @@ class _RecorderHomeState extends State<RecorderHome>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (_initializePlatformServices) {
       trayManager.removeListener(this);
       windowManager.removeListener(this);
@@ -193,27 +221,44 @@ class _RecorderHomeState extends State<RecorderHome>
       await _initTray();
     }
     await _loadConfig();
+    if (_requiresDesktopPermissions) {
+      await _refreshPermissionStatus(showWindowWhenMissing: true);
+      if (!_permissionsAuthorized) {
+        return;
+      }
+    }
     if (!_initializePlatformServices) {
       return;
     }
+    await _initializeInputServices();
+  }
+
+  Future<void> _initializeInputServices() async {
+    if (_inputServicesInitialized ||
+        _inputServicesInitializing ||
+        !_permissionsAuthorized) {
+      return;
+    }
+    _inputServicesInitializing = true;
     try {
       await _transcriptDeliveryService.preparePaste();
+      await _registerHotkeys();
+      _inputServicesInitialized = true;
+      await _refreshTrayMenu();
     } catch (error) {
-      debugPrint('Desktop input warm-up failed: $error');
+      _inputServicesInitialized = false;
+      _setError('Failed to initialize desktop input: $error');
+    } finally {
+      _inputServicesInitializing = false;
     }
-    await _registerHotkeys();
   }
 
   Future<void> _registerHotkeys() async {
-    try {
-      await _hotkeyService.initialize(
-        shortcutConfig: _shortcutConfig,
-        onToggle: (mode) => unawaited(_toggleCapture(mode)),
-        onError: (error) => _setError('Shortcut service error: $error'),
-      );
-    } catch (error) {
-      _setError('Failed to register hotkeys: $error');
-    }
+    await _hotkeyService.initialize(
+      shortcutConfig: _shortcutConfig,
+      onToggle: (mode) => unawaited(_toggleCapture(mode)),
+      onError: (error) => _setError('Shortcut service error: $error'),
+    );
   }
 
   Future<void> _loadConfig() async {
@@ -234,13 +279,16 @@ class _RecorderHomeState extends State<RecorderHome>
       setState(() {
         _config = config;
         _shortcutConfig = shortcutConfig;
-        _showSettings = !configIsValid;
+        _showSettings =
+            !configIsValid ||
+            (_permissionStatusLoaded && !_permissionsAuthorized);
         _state = configIsValid
             ? RecorderState.ready
             : RecorderState.needsConfig;
         _lastError = configError;
       });
-      if (!configIsValid) {
+      if (!configIsValid ||
+          (_permissionStatusLoaded && !_permissionsAuthorized)) {
         _refreshModelsIfPossible();
         await _showSettingsWindow();
       }
@@ -279,8 +327,13 @@ class _RecorderHomeState extends State<RecorderHome>
         MenuItem(
           key: 'start_capture',
           label: _isRecording ? 'Recording' : 'Start capture',
+          disabled: !_permissionsAuthorized || _isRecording,
         ),
-        MenuItem(key: 'stop_capture', label: 'Stop and paste'),
+        MenuItem(
+          key: 'stop_capture',
+          label: 'Stop and paste',
+          disabled: !_isRecording,
+        ),
         MenuItem.separator(),
         MenuItem(key: 'settings', label: 'Settings'),
         MenuItem(key: 'quit_app', label: 'Quit'),
@@ -299,6 +352,10 @@ class _RecorderHomeState extends State<RecorderHome>
 
   Future<void> _startCapture([PasteMode pasteMode = PasteMode.normal]) async {
     if (!_canStart) {
+      return;
+    }
+
+    if (!await _ensurePermissions()) {
       return;
     }
 
@@ -376,6 +433,21 @@ class _RecorderHomeState extends State<RecorderHome>
         return;
       }
 
+      if (!await _ensurePermissions()) {
+        await _transcriptDeliveryService.copyToClipboard(transcript);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _state = RecorderState.error;
+          _lastTranscript = transcript;
+          _lastError =
+              'Permissions changed while recording. The transcript was copied '
+              'but could not be pasted.';
+        });
+        return;
+      }
+
       await _transcriptDeliveryService.deliver(transcript, resolvedPasteMode);
 
       if (!mounted) {
@@ -417,7 +489,7 @@ class _RecorderHomeState extends State<RecorderHome>
       await _configRepository.save(config);
       if (_supportsShortcutSettings) {
         await _configRepository.saveShortcutConfig(_shortcutConfig);
-        if (_initializePlatformServices) {
+        if (_initializePlatformServices && _permissionsAuthorized) {
           await _registerHotkeys();
         }
       }
@@ -427,11 +499,15 @@ class _RecorderHomeState extends State<RecorderHome>
       setState(() {
         _config = config;
         _state = RecorderState.ready;
-        _showSettings = false;
+        _showSettings = !_permissionsAuthorized;
         _lastError = null;
         _settingsStatus = null;
       });
-      await _hideWindowAfterCapture();
+      if (_permissionsAuthorized) {
+        await _hideWindowAfterCapture();
+      } else {
+        await _showSettingsWindow();
+      }
     } catch (error) {
       setState(() {
         _state = RecorderState.needsConfig;
@@ -468,7 +544,9 @@ class _RecorderHomeState extends State<RecorderHome>
   }
 
   Future<void> _hideWindowAfterCapture() async {
-    if (!_initializePlatformServices || _showSettings) {
+    if (!_initializePlatformServices ||
+        _showSettings ||
+        !_permissionsAuthorized) {
       return;
     }
 
@@ -620,6 +698,124 @@ class _RecorderHomeState extends State<RecorderHome>
     unawaited(_showSettingsWindow());
   }
 
+  Future<bool> _ensurePermissions() async {
+    if (!_requiresDesktopPermissions) {
+      return true;
+    }
+    await _refreshPermissionStatus(showWindowWhenMissing: true);
+    if (!_permissionsAuthorized) {
+      return false;
+    }
+    await _initializeInputServices();
+    return _inputServicesInitialized;
+  }
+
+  Future<void> _refreshPermissionStatus({
+    required bool showWindowWhenMissing,
+  }) async {
+    if (!_requiresDesktopPermissions ||
+        _isPermissionActionPending ||
+        _isRefreshingPermissions) {
+      return;
+    }
+    _isRefreshingPermissions = true;
+    try {
+      final status = await _desktopPermissionService.getStatus();
+      if (!mounted) {
+        return;
+      }
+      final wasAuthorized = _permissionsAuthorized;
+      setState(() {
+        _permissionStatus = status;
+        _permissionStatusLoaded = true;
+        _permissionError = null;
+        if (!status.isAuthorized) {
+          _showSettings = true;
+          if (_state != RecorderState.recording &&
+              _state != RecorderState.transcribing) {
+            _state = RecorderState.needsConfig;
+          }
+        }
+      });
+
+      if (!status.isAuthorized) {
+        if (_inputServicesInitialized || wasAuthorized) {
+          await _hotkeyService.dispose();
+          _inputServicesInitialized = false;
+        }
+        await _refreshTrayMenu();
+        if (showWindowWhenMissing) {
+          await _showSettingsWindow();
+        }
+        return;
+      }
+
+      if (_initializePlatformServices) {
+        await _initializeInputServices();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _permissionStatusLoaded = true;
+        _permissionError = 'Could not read macOS permissions: $error';
+        _showSettings = true;
+      });
+      if (showWindowWhenMissing) {
+        await _showSettingsWindow();
+      }
+    } finally {
+      _isRefreshingPermissions = false;
+    }
+  }
+
+  Future<void> _requestPermission(DesktopPermission permission) async {
+    if (_isPermissionActionPending) {
+      return;
+    }
+    setState(() {
+      _isPermissionActionPending = true;
+      _permissionError = null;
+    });
+    try {
+      final status = switch (permission) {
+        DesktopPermission.microphone =>
+          await _desktopPermissionService.requestMicrophone(),
+        DesktopPermission.accessibility =>
+          await _desktopPermissionService.requestAccessibility(),
+      };
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _permissionStatus = status;
+        _permissionStatusLoaded = true;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _permissionError = 'Permission request failed: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isPermissionActionPending = false);
+      }
+    }
+    if (_permissionsAuthorized && _initializePlatformServices) {
+      await _initializeInputServices();
+    }
+  }
+
+  Future<void> _openPermissionSettings(DesktopPermission permission) async {
+    try {
+      await _desktopPermissionService.openSettings(permission);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _permissionError = 'Could not open settings: $error');
+      }
+    }
+  }
+
   void _setError(String message) {
     if (!mounted) {
       return;
@@ -663,8 +859,26 @@ class _RecorderHomeState extends State<RecorderHome>
     if (_isQuitting) {
       return;
     }
+    if (!_permissionsAuthorized) {
+      unawaited(_showSettingsWindow());
+      return;
+    }
     windowManager.hide();
     unawaited(windowManager.setSkipTaskbar(true));
+  }
+
+  @override
+  void onWindowFocus() {
+    if (_requiresDesktopPermissions) {
+      unawaited(_refreshPermissionStatus(showWindowWhenMissing: false));
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _requiresDesktopPermissions) {
+      unawaited(_refreshPermissionStatus(showWindowWhenMissing: false));
+    }
   }
 
   @override
@@ -679,7 +893,8 @@ class _RecorderHomeState extends State<RecorderHome>
               actions: [
                 IconButton(
                   tooltip: 'Close',
-                  onPressed: _config?.isComplete == true
+                  onPressed:
+                      _config?.isComplete == true && _permissionsAuthorized
                       ? () {
                           setState(() => _showSettings = false);
                           unawaited(_hideWindowAfterCapture());
@@ -790,6 +1005,35 @@ class _RecorderHomeState extends State<RecorderHome>
         Text(
           'Audio API v${SttappAudio.nativeApiVersion} · Input API v${DesktopInput.nativeApiVersion}',
         ),
+        if (_requiresDesktopPermissions) ...[
+          const SizedBox(height: 20),
+          Text(
+            'macOS permissions',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          _buildPermissionCard(
+            context,
+            permission: DesktopPermission.microphone,
+            title: 'Microphone',
+            description:
+                'Required to record audio after you start a transcription.',
+            status: _permissionStatus.microphone,
+          ),
+          const SizedBox(height: 10),
+          _buildPermissionCard(
+            context,
+            permission: DesktopPermission.accessibility,
+            title: 'Accessibility',
+            description:
+                'Required to paste completed transcripts into the active app.',
+            status: _permissionStatus.accessibility,
+          ),
+          if (_permissionError != null) ...[
+            const SizedBox(height: 8),
+            Text(_permissionError!, style: TextStyle(color: colorScheme.error)),
+          ],
+        ],
         const SizedBox(height: 20),
         TextField(
           controller: _apiKeyController,
@@ -919,6 +1163,79 @@ class _RecorderHomeState extends State<RecorderHome>
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildPermissionCard(
+    BuildContext context, {
+    required DesktopPermission permission,
+    required String title,
+    required String description,
+    required DesktopPermissionState status,
+  }) {
+    final authorized = status == DesktopPermissionState.authorized;
+    final requiresSettings =
+        permission == DesktopPermission.microphone &&
+        (status == DesktopPermissionState.denied ||
+            status == DesktopPermissionState.restricted);
+    final label = switch (status) {
+      DesktopPermissionState.notDetermined => 'Not requested',
+      DesktopPermissionState.denied => 'Not granted',
+      DesktopPermissionState.restricted => 'Restricted',
+      DesktopPermissionState.authorized => 'Granted',
+      DesktopPermissionState.unavailable => 'Unavailable',
+    };
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              authorized ? Icons.check_circle : Icons.warning_amber,
+              color: authorized
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 3),
+                  Text(description),
+                  const SizedBox(height: 3),
+                  Text('Status: $label'),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (!authorized)
+              Column(
+                children: [
+                  FilledButton.tonal(
+                    onPressed: _isPermissionActionPending
+                        ? null
+                        : requiresSettings
+                        ? () => _openPermissionSettings(permission)
+                        : () => _requestPermission(permission),
+                    child: Text(requiresSettings ? 'Open Settings' : 'Grant'),
+                  ),
+                  if (permission == DesktopPermission.accessibility)
+                    TextButton(
+                      onPressed: _isPermissionActionPending
+                          ? null
+                          : () => _openPermissionSettings(permission),
+                      child: const Text('Open Settings'),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
