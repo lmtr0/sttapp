@@ -183,7 +183,10 @@ class _RecorderHomeState extends State<RecorderHome>
         widget.transcriptDeliveryService ?? const TranscriptDeliveryService();
     _hotkeyService = widget.hotkeyService ?? HotkeyService();
     _desktopPermissionService =
-        widget.desktopPermissionService ?? defaultDesktopPermissionService();
+        widget.desktopPermissionService ??
+        (widget.initializePlatformServices
+            ? defaultDesktopPermissionService()
+            : const PermissiveDesktopPermissionService());
     if (_desktopPermissionService.requiresAuthorization) {
       _permissionStatus = const DesktopPermissionSnapshot.unavailable();
     }
