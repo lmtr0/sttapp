@@ -289,6 +289,11 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Verify macOS release artifact
+        shell: bash
+        run: |
+          test -f "release-assets/sttapp-macos-universal-${{ needs.validate.outputs.tag }}.dmg"
+
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
