@@ -81,6 +81,7 @@ final class HotkeyManagerBackend implements HotkeyBackend {
 
     final normalHotKey = HotKey(
       key: shortcutConfig.logicalKey,
+      modifiers: const <HotKeyModifier>[],
       scope: HotKeyScope.system,
     );
     final plainHotKey = HotKey(
@@ -89,18 +90,22 @@ final class HotkeyManagerBackend implements HotkeyBackend {
       scope: HotKeyScope.system,
     );
 
-    await registrar.register(
-      normalHotKey,
-      keyDownHandler: (_) => onToggle(PasteMode.normal),
-    );
-    await registrar.register(
-      plainHotKey,
-      keyDownHandler: (_) => onToggle(PasteMode.plain),
-    );
+    try {
+      await registrar.register(
+        normalHotKey,
+        keyDownHandler: (_) => onToggle(PasteMode.normal),
+      );
+      _registeredHotKeys.add(normalHotKey);
 
-    _registeredHotKeys
-      ..add(normalHotKey)
-      ..add(plainHotKey);
+      await registrar.register(
+        plainHotKey,
+        keyDownHandler: (_) => onToggle(PasteMode.plain),
+      );
+      _registeredHotKeys.add(plainHotKey);
+    } catch (_) {
+      await dispose();
+      rethrow;
+    }
   }
 
   @override

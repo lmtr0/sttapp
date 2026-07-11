@@ -100,7 +100,7 @@ void main() {
 
     expect(registrar.registered, hasLength(2));
     expect(registrar.registered[0].logicalKey, LogicalKeyboardKey.f6);
-    expect(registrar.registered[0].modifiers, isNull);
+    expect(registrar.registered[0].modifiers, isEmpty);
     expect(registrar.registered[1].logicalKey, LogicalKeyboardKey.f6);
     expect(registrar.registered[1].modifiers, [HotKeyModifier.shift]);
 
@@ -129,15 +129,36 @@ void main() {
       expect(registrar.registered.last.logicalKey, LogicalKeyboardKey.f7);
     },
   );
+
+  test('hotkey manager backend rolls back partial registration', () async {
+    final registrar = _FakeHotkeyRegistrar(failRegistrationAt: 2);
+    final backend = HotkeyManagerBackend(registrar: registrar);
+
+    await expectLater(
+      backend.initialize(shortcutConfig: ShortcutConfig(), onToggle: (_) {}),
+      throwsStateError,
+    );
+
+    expect(registrar.registered, isEmpty);
+    expect(registrar.unregistered, hasLength(1));
+  });
 }
 
 final class _FakeHotkeyRegistrar implements HotkeyRegistrar {
+  _FakeHotkeyRegistrar({this.failRegistrationAt});
+
+  final int? failRegistrationAt;
   final registered = <HotKey>[];
   final unregistered = <HotKey>[];
   final handlers = <HotKeyHandler>[];
+  int _registrationCount = 0;
 
   @override
   Future<void> register(HotKey hotKey, {HotKeyHandler? keyDownHandler}) async {
+    _registrationCount += 1;
+    if (_registrationCount == failRegistrationAt) {
+      throw StateError('registration failed');
+    }
     registered.add(hotKey);
     if (keyDownHandler != null) {
       handlers.add(keyDownHandler);

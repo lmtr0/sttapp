@@ -44,6 +44,34 @@ flutter build macos --release
 flutter build windows --release
 ```
 
+## Installing on macOS
+
+macOS releases are distributed as a single universal DMG that runs natively on
+both Intel and Apple Silicon Macs. Open the DMG and drag `sttapp.app` into the
+Applications folder.
+
+The current DMG is not Developer ID signed or notarized. On first launch,
+Control-click `sttapp.app` in Finder, choose **Open**, and confirm that you want
+to run it. On macOS versions that do not offer that confirmation immediately,
+attempt to open the app once and then use **System Settings > Privacy & Security
+> Open Anyway**.
+
+sttapp needs both of these permissions before capture is enabled:
+
+- **Microphone** records audio only after you start a transcription.
+- **Accessibility** sends the paste shortcut to the application that was active
+  when transcription started.
+
+The first-run setup window explains and requests both permissions. If access is
+denied or later revoked, open **System Settings > Privacy & Security**, select
+**Microphone** or **Accessibility**, enable sttapp, and return to the app. The
+status refreshes when the setup window regains focus.
+
+Because the app is unsigned, replacing it with a new downloaded build may cause
+macOS to request approval or privacy permissions again. A Developer ID signing
+and notarization step can be added to the release workflow later without
+changing the universal build or DMG layout.
+
 ## Project Layout
 
 - `lib/` contains the Flutter app.
