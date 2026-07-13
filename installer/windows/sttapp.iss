@@ -70,11 +70,8 @@ begin
   { 1638 means that another/newer compatible version is already installed. }
   if (ResultCode <> 0) and (ResultCode <> 1638) and (ResultCode <> 3010) then
   begin
-    Result := Format(
-      'The Microsoft Visual C++ Redistributable installation failed with exit code %d. ' +
-      'Run this installer again with /LOG="path-to-log.txt" for details.',
-      [ResultCode]
-    );
+    Result := 'The Microsoft Visual C++ Redistributable installation failed with exit code ' +
+      IntToStr(ResultCode) + '. Run this installer again with /LOG=path-to-log.txt for details.';
     exit;
   end;
 
