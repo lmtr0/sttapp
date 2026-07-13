@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Version tag to publish, for example v1.2.3
+        description: Version tag to publish, for example v2026.1.0713.1783900800
         required: true
         type: string
 
@@ -21,6 +21,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      native_version: ${{ steps.version.outputs.native_version }}
       build_number: ${{ steps.version.outputs.build_number }}
 
     steps:
@@ -37,13 +38,26 @@ jobs:
             tag="${GITHUB_REF_NAME}"
           fi
 
-          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Expected a semver tag like v1.2.3, got '${tag}'." >&2
+          if [[ ! "${tag}" =~ ^v([0-9]{4})\.([0-9]+)\.([0-9]{4})\.([0-9]{10})$ ]]; then
+            echo "Expected a tag like v2026.1.0713.1783900800, got '${tag}'." >&2
             exit 1
           fi
 
+          year="${BASH_REMATCH[1]}"
+          major="${BASH_REMATCH[2]}"
+          month_day="${BASH_REMATCH[3]}"
+          month="${month_day:0:2}"
+          day="${month_day:2:2}"
+          resolved_date="$(date -u -d "${year}-${month}-${day}" '+%Y.%m%d' 2>/dev/null || true)"
+          if [ "${resolved_date}" != "${year}.${month_day}" ]; then
+            echo "Tag contains an invalid calendar date: '${year}.${month_day}'." >&2
+            exit 1
+          fi
+
+          native_patch="$((10#${month_day}))"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+          echo "native_version=${year}.${major}.${native_patch}" >> "${GITHUB_OUTPUT}"
           echo "build_number=${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
 
   build:
@@ -137,8 +151,9 @@ jobs:
         run: >
           flutter build ${{ matrix.flutter_target }}
           --release
-          --build-name ${{ needs.validate.outputs.version }}
+          --build-name ${{ needs.validate.outputs.native_version }}
           --build-number ${{ needs.validate.outputs.build_number }}
+          --dart-define=STTAPP_RELEASE_TAG=${{ needs.validate.outputs.tag }}
 
       - name: Bundle Linux runtime libraries and launcher
         if: matrix.platform == 'linux'

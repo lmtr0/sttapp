@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/desktop_permission_service.dart';
@@ -8,9 +9,11 @@ import 'package:sttapp/services/hotkey_service.dart';
 import 'package:sttapp/services/startup_error_tracker.dart';
 import 'package:sttapp/services/transcript_delivery_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
+import 'package:sttapp/services/update_service.dart';
 import 'package:sttapp_audio/sttapp_audio.dart';
 import 'package:sttapp_input/sttapp_input.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 const _recorderWindowSize = Size(400, 120);
@@ -20,6 +23,14 @@ const _trayRecordingPng = 'assets/tray/tray_recording.png';
 const _trayDefaultIco = 'assets/tray/tray_default.ico';
 const _trayRecordingIco = 'assets/tray/tray_recording.ico';
 const _customModelValue = '__custom__';
+const _compiledReleaseTag = String.fromEnvironment('STTAPP_RELEASE_TAG');
+const _compiledFakeLatestTag = String.fromEnvironment('STTAPP_FAKE_LATEST_TAG');
+
+typedef ReleaseLauncher = Future<bool> Function(Uri uri);
+
+Future<bool> _launchRelease(Uri uri) {
+  return launchUrl(uri, mode: LaunchMode.externalApplication);
+}
 
 Future<void> main() {
   return StartupErrorTracker.runGuarded(_main);
@@ -57,6 +68,10 @@ class SttApp extends StatelessWidget {
     this.transcriptDeliveryService,
     this.hotkeyService,
     this.desktopPermissionService,
+    this.updateService,
+    this.releaseLauncher,
+    this.releaseTag,
+    this.fakeLatestTag,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -66,6 +81,10 @@ class SttApp extends StatelessWidget {
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final DesktopPermissionService? desktopPermissionService;
+  final UpdateService? updateService;
+  final ReleaseLauncher? releaseLauncher;
+  final String? releaseTag;
+  final String? fakeLatestTag;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -84,6 +103,10 @@ class SttApp extends StatelessWidget {
         transcriptDeliveryService: transcriptDeliveryService,
         hotkeyService: hotkeyService,
         desktopPermissionService: desktopPermissionService,
+        updateService: updateService,
+        releaseLauncher: releaseLauncher,
+        releaseTag: releaseTag,
+        fakeLatestTag: fakeLatestTag,
         supportsShortcutSettings: supportsShortcutSettings,
         initializePlatformServices: initializePlatformServices,
       ),
@@ -99,6 +122,10 @@ class RecorderHome extends StatefulWidget {
     this.transcriptDeliveryService,
     this.hotkeyService,
     this.desktopPermissionService,
+    this.updateService,
+    this.releaseLauncher,
+    this.releaseTag,
+    this.fakeLatestTag,
     this.supportsShortcutSettings,
     this.initializePlatformServices = true,
   });
@@ -108,6 +135,10 @@ class RecorderHome extends StatefulWidget {
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final DesktopPermissionService? desktopPermissionService;
+  final UpdateService? updateService;
+  final ReleaseLauncher? releaseLauncher;
+  final String? releaseTag;
+  final String? fakeLatestTag;
   final bool? supportsShortcutSettings;
   final bool initializePlatformServices;
 
@@ -117,6 +148,14 @@ class RecorderHome extends StatefulWidget {
 
 enum RecorderState { ready, needsConfig, recording, transcribing, done, error }
 
+enum UpdateStatus {
+  development,
+  checking,
+  latest,
+  updateAvailable,
+  unavailable,
+}
+
 class _RecorderHomeState extends State<RecorderHome>
     with TrayListener, WindowListener, WidgetsBindingObserver {
   late final AudioRecorder _recorder;
@@ -125,9 +164,14 @@ class _RecorderHomeState extends State<RecorderHome>
   late final TranscriptDeliveryService _transcriptDeliveryService;
   late final HotkeyService _hotkeyService;
   late final DesktopPermissionService _desktopPermissionService;
+  late final UpdateService _updateService;
+  late final ReleaseLauncher _releaseLauncher;
   late final bool _ownsTranscriptionService;
+  late final bool _ownsUpdateService;
   late final bool _supportsShortcutSettings;
   late final bool _initializePlatformServices;
+  late final String _releaseTag;
+  late final String _fakeLatestTag;
 
   final _apiKeyController = TextEditingController();
   final _baseUrlController = TextEditingController(text: defaultOpenAiBaseUrl);
@@ -141,8 +185,11 @@ class _RecorderHomeState extends State<RecorderHome>
   String? _lastTranscript;
   String? _lastError;
   String? _settingsStatus;
+  String? _updateActionError;
   String _selectedModelValue = _customModelValue;
   List<String> _availableModels = const [];
+  AvailableUpdate? _availableUpdate;
+  UpdateStatus _updateStatus = UpdateStatus.development;
   String? _modelsLoadedForEndpoint;
   bool _showSettings = false;
   bool _showApiKey = false;
@@ -154,6 +201,7 @@ class _RecorderHomeState extends State<RecorderHome>
   bool _permissionStatusLoaded = false;
   bool _inputServicesInitialized = false;
   bool _inputServicesInitializing = false;
+  bool _showUpdateWhenIdle = false;
   String? _permissionError;
   DesktopPermissionSnapshot _permissionStatus =
       const DesktopPermissionSnapshot.authorized();
@@ -186,10 +234,20 @@ class _RecorderHomeState extends State<RecorderHome>
         (widget.initializePlatformServices
             ? defaultDesktopPermissionService()
             : const PermissiveDesktopPermissionService());
+    _updateService = widget.updateService ?? UpdateService();
+    _releaseLauncher = widget.releaseLauncher ?? _launchRelease;
+    _releaseTag = (widget.releaseTag ?? _compiledReleaseTag).trim();
+    _fakeLatestTag = kDebugMode
+        ? (widget.fakeLatestTag ?? _compiledFakeLatestTag).trim()
+        : '';
+    _updateStatus = _releaseTag.isEmpty
+        ? UpdateStatus.development
+        : UpdateStatus.checking;
     if (_desktopPermissionService.requiresAuthorization) {
       _permissionStatus = const DesktopPermissionSnapshot.unavailable();
     }
     _ownsTranscriptionService = widget.transcriptionService == null;
+    _ownsUpdateService = widget.updateService == null;
     _supportsShortcutSettings =
         widget.supportsShortcutSettings ?? !Platform.isLinux;
     _initializePlatformServices = widget.initializePlatformServices;
@@ -211,6 +269,9 @@ class _RecorderHomeState extends State<RecorderHome>
     if (_ownsTranscriptionService) {
       _transcriptionService.close();
     }
+    if (_ownsUpdateService) {
+      _updateService.close();
+    }
     _apiKeyController.dispose();
     _baseUrlController.dispose();
     _modelController.dispose();
@@ -223,6 +284,7 @@ class _RecorderHomeState extends State<RecorderHome>
       await _initTray();
     }
     await _loadConfig();
+    unawaited(_checkForUpdates());
     if (_requiresDesktopPermissions) {
       await _refreshPermissionStatus(showWindowWhenMissing: true);
       if (!_permissionsAuthorized) {
@@ -296,6 +358,80 @@ class _RecorderHomeState extends State<RecorderHome>
       }
     } catch (error) {
       _setError(error.toString());
+    }
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (_releaseTag.isEmpty) {
+      return;
+    }
+
+    try {
+      final update = await _updateService.checkForUpdate(
+        currentTag: _releaseTag,
+        fakeLatestTag: _fakeLatestTag.isEmpty ? null : _fakeLatestTag,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      final shouldDefer = update != null && (_isRecording || _isTranscribing);
+      setState(() {
+        _availableUpdate = update;
+        _updateActionError = null;
+        _updateStatus = update == null
+            ? UpdateStatus.latest
+            : UpdateStatus.updateAvailable;
+        if (shouldDefer) {
+          _showUpdateWhenIdle = true;
+        } else if (update != null) {
+          _showSettings = true;
+        }
+      });
+      if (update != null && !shouldDefer) {
+        await _showSettingsWindow();
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _availableUpdate = null;
+        _updateStatus = UpdateStatus.unavailable;
+      });
+    }
+  }
+
+  Future<void> _showDeferredUpdateIfNeeded() async {
+    if (!_showUpdateWhenIdle || _availableUpdate == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _showUpdateWhenIdle = false;
+      _showSettings = true;
+    });
+    await _showSettingsWindow();
+  }
+
+  Future<void> _openAvailableUpdate() async {
+    final update = _availableUpdate;
+    if (update == null) {
+      return;
+    }
+    setState(() => _updateActionError = null);
+    try {
+      final opened = await _releaseLauncher(update.releaseUri);
+      if (!opened && mounted) {
+        setState(() {
+          _updateActionError = 'Could not open the GitHub release page.';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _updateActionError = 'Could not open the GitHub release page.';
+        });
+      }
     }
   }
 
@@ -465,6 +601,7 @@ class _RecorderHomeState extends State<RecorderHome>
       clip?.dispose();
       await _refreshTrayMenu();
       await _hideWindowAfterCapture();
+      await _showDeferredUpdateIfNeeded();
     }
   }
 
@@ -1001,12 +1138,40 @@ class _RecorderHomeState extends State<RecorderHome>
     final modelDropdownValue = _availableModels.contains(_selectedModelValue)
         ? _selectedModelValue
         : _customModelValue;
+    final updateStatusText = switch (_updateStatus) {
+      UpdateStatus.development => 'Development build',
+      UpdateStatus.checking => 'Checking for updates…',
+      UpdateStatus.latest => 'You are on the latest version',
+      UpdateStatus.updateAvailable => 'Update needed',
+      UpdateStatus.unavailable => 'Unable to check for updates',
+    };
+    final updateStatusColor = switch (_updateStatus) {
+      UpdateStatus.updateAvailable => colorScheme.error,
+      UpdateStatus.latest => colorScheme.primary,
+      _ => colorScheme.onSurfaceVariant,
+    };
 
     return ListView(
       children: [
-        Text(
-          'Audio API v${SttappAudio.nativeApiVersion} · Input API v${DesktopInput.nativeApiVersion}',
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text:
+                    'Audio API v${SttappAudio.nativeApiVersion} · '
+                    'Input API v${DesktopInput.nativeApiVersion} · ',
+              ),
+              TextSpan(
+                text: updateStatusText,
+                style: TextStyle(color: updateStatusColor),
+              ),
+            ],
+          ),
         ),
+        if (_availableUpdate != null) ...[
+          const SizedBox(height: 12),
+          _buildUpdateCard(context, _availableUpdate!),
+        ],
         if (_requiresDesktopPermissions) ...[
           const SizedBox(height: 20),
           Text(
@@ -1165,6 +1330,61 @@ class _RecorderHomeState extends State<RecorderHome>
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildUpdateCard(BuildContext context, AvailableUpdate update) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      color: colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.system_update, color: colorScheme.onErrorContainer),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'A new version is available',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(color: colorScheme.onErrorContainer),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${update.currentVersion.tag} → '
+                        '${update.latestVersion.tag}',
+                        style: TextStyle(color: colorScheme.onErrorContainer),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonal(
+                onPressed: _openAvailableUpdate,
+                child: const Text('View release'),
+              ),
+            ),
+            if (_updateActionError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _updateActionError!,
+                style: TextStyle(color: colorScheme.onErrorContainer),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
