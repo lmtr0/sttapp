@@ -36,6 +36,22 @@ flutter run -d macos
 flutter run -d windows
 ```
 
+Released builds embed tags in the form
+`v<year>.<major>.<mmdd>.<unix-seconds>`. To exercise the update UI without a
+published release, provide both the current and fake latest tags in a debug
+build:
+
+```bash
+flutter run -d linux \
+  --dart-define=STTAPP_RELEASE_TAG=v2026.1.0713.1783900800 \
+  --dart-define=STTAPP_FAKE_LATEST_TAG=v2026.1.0713.1783904400
+```
+
+The fake tag is ignored in release builds. Give both defines the same value to
+test the “latest version” status; open Settings from the tray because an
+up-to-date app remains hidden at startup. Replace `linux` with `macos` or
+`windows` to test another desktop target.
+
 Build a release:
 
 ```bash

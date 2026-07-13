@@ -8,6 +8,7 @@ import 'package:sttapp/main.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/desktop_permission_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
+import 'package:sttapp/services/update_service.dart';
 
 void main() {
   test('app widget is available', () {
@@ -176,6 +177,85 @@ void main() {
     );
     expect(closeButton.onPressed, isNotNull);
   });
+
+  testWidgets('newer release opens settings and shows update card', (
+    tester,
+  ) async {
+    Uri? openedRelease;
+    await tester.pumpWidget(
+      SttApp(
+        configRepository: _validConfigRepository(),
+        desktopPermissionService: const PermissiveDesktopPermissionService(),
+        updateService: UpdateService(client: _UnexpectedUpdateClient()),
+        releaseTag: 'v2026.1.0713.1783900800',
+        fakeLatestTag: 'v2026.1.0713.1783904400',
+        releaseLauncher: (uri) async {
+          openedRelease = uri;
+          return true;
+        },
+        initializePlatformServices: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Update needed'), findsOneWidget);
+    expect(find.text('A new version is available'), findsOneWidget);
+    expect(
+      find.text('v2026.1.0713.1783900800 → v2026.1.0713.1783904400'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'View release'));
+    await tester.pump();
+    expect(openedRelease, Uri.parse(githubReleasesUri));
+  });
+
+  testWidgets('equal release shows latest status without an update card', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      SttApp(
+        configRepository: _validConfigRepository(),
+        desktopPermissionService: const PermissiveDesktopPermissionService(),
+        updateService: UpdateService(client: _UnexpectedUpdateClient()),
+        releaseTag: 'v2026.1.0713.1783900800',
+        fakeLatestTag: 'v2026.1.0713.1783900800',
+        initializePlatformServices: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ready'), findsOneWidget);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('You are on the latest version'),
+      findsOneWidget,
+    );
+    expect(find.text('A new version is available'), findsNothing);
+  });
+
+  testWidgets('failed update check is non-fatal', (tester) async {
+    await tester.pumpWidget(
+      SttApp(
+        configRepository: _validConfigRepository(),
+        desktopPermissionService: const PermissiveDesktopPermissionService(),
+        updateService: UpdateService(client: _UnexpectedUpdateClient()),
+        releaseTag: 'not-a-release-tag',
+        fakeLatestTag: 'v2026.1.0713.1783900800',
+        initializePlatformServices: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ready'), findsOneWidget);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Unable to check for updates'), findsOneWidget);
+    expect(find.text('A new version is available'), findsNothing);
+  });
 }
 
 ConfigRepository _validConfigRepository() {
@@ -246,5 +326,12 @@ final class _ModelsClient extends http.BaseClient {
       200,
       headers: {'content-type': 'application/json'},
     );
+  }
+}
+
+final class _UnexpectedUpdateClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    throw StateError('The fake latest tag should bypass HTTP.');
   }
 }
