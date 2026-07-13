@@ -29,7 +29,6 @@ Future<void> _main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
   await windowManager.setPreventClose(true);
-  await windowManager.setSkipTaskbar(true);
 
   const windowOptions = WindowOptions(
     size: _recorderWindowSize,

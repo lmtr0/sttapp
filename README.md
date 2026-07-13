@@ -44,6 +44,17 @@ flutter build macos --release
 flutter build windows --release
 ```
 
+## Installing on Windows
+
+Download and run `sttapp-windows-x64-<version>-setup.exe`. The installer copies
+the complete application bundle and installs the required Microsoft Visual C++
+Redistributable. Administrator approval is required because both are installed
+for all users under Program Files.
+
+If the app does not open, its early native and Dart startup diagnostics are in
+`%LOCALAPPDATA%\sttapp\startup.log`. Installer diagnostics can be captured by
+running the setup executable with `/LOG="sttapp-installer.log"`.
+
 ## Installing on macOS
 
 macOS releases are distributed as a single universal DMG that runs natively on
