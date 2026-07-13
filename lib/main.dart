@@ -114,6 +114,75 @@ class SttApp extends StatelessWidget {
   }
 }
 
+class ShortcutRegistrationNotice extends StatelessWidget {
+  const ShortcutRegistrationNotice({
+    super.key,
+    required this.checking,
+    required this.message,
+    required this.onRetry,
+  });
+
+  final bool checking;
+  final String? message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      color: checking
+          ? colorScheme.surfaceContainerHighest
+          : colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (checking)
+                  const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Icon(
+                    Icons.warning_amber,
+                    color: colorScheme.onErrorContainer,
+                  ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    checking
+                        ? 'Registering global shortcuts…'
+                        : 'Global shortcuts unavailable',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            if (!checking) ...[
+              const SizedBox(height: 8),
+              Text(
+                message ??
+                    'The operating system did not register every shortcut.',
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonal(
+                  onPressed: onRetry,
+                  child: const Text('Retry registration'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class RecorderHome extends StatefulWidget {
   const RecorderHome({
     super.key,
@@ -147,6 +216,8 @@ class RecorderHome extends StatefulWidget {
 }
 
 enum RecorderState { ready, needsConfig, recording, transcribing, done, error }
+
+enum ShortcutRegistrationState { idle, checking, registered, failed }
 
 enum UpdateStatus {
   development,
@@ -203,6 +274,9 @@ class _RecorderHomeState extends State<RecorderHome>
   bool _inputServicesInitializing = false;
   bool _showUpdateWhenIdle = false;
   String? _permissionError;
+  ShortcutRegistrationState _shortcutRegistrationState =
+      ShortcutRegistrationState.idle;
+  String? _shortcutRegistrationError;
   DesktopPermissionSnapshot _permissionStatus =
       const DesktopPermissionSnapshot.authorized();
 
@@ -311,18 +385,125 @@ class _RecorderHomeState extends State<RecorderHome>
       await _refreshTrayMenu();
     } catch (error) {
       _inputServicesInitialized = false;
-      _setError('Failed to initialize desktop input: $error');
+      final message =
+          _shortcutRegistrationError ??
+          'Failed to initialize desktop input: $error';
+      StartupErrorTracker.recordError(
+        'Desktop input initialization failed',
+        error,
+      );
+      if (mounted) {
+        setState(() {
+          _showSettings = true;
+          _state = RecorderState.error;
+          _lastError = message;
+        });
+        await _refreshTrayMenu();
+        await _showSettingsWindow();
+      }
     } finally {
       _inputServicesInitializing = false;
     }
   }
 
   Future<void> _registerHotkeys() async {
-    await _hotkeyService.initialize(
-      shortcutConfig: _shortcutConfig,
-      onToggle: (mode) => unawaited(_toggleCapture(mode)),
-      onError: (error) => _setError('Shortcut service error: $error'),
+    if (mounted) {
+      setState(() {
+        _shortcutRegistrationState = ShortcutRegistrationState.checking;
+        _shortcutRegistrationError = null;
+      });
+    }
+    StartupErrorTracker.recordEvent(
+      'Global shortcut registration begin: '
+      '${_shortcutConfig.normalLabel}, ${_shortcutConfig.plainLabel}',
     );
+
+    try {
+      final registration = await _hotkeyService.initialize(
+        shortcutConfig: _shortcutConfig,
+        onToggle: (mode) {
+          StartupErrorTracker.recordEvent(
+            'Global shortcut activated: ${mode.name}',
+          );
+          unawaited(_toggleCapture(mode));
+        },
+        onError: _handleShortcutServiceError,
+      );
+      StartupErrorTracker.recordEvent(
+        'Global shortcut registration succeeded: '
+        '${registration.shortcutIds.join(', ')}',
+      );
+      if (mounted) {
+        setState(() {
+          _shortcutRegistrationState = ShortcutRegistrationState.registered;
+          _shortcutRegistrationError = null;
+        });
+      }
+    } catch (error, stackTrace) {
+      final message = _shortcutFailureMessage(error);
+      StartupErrorTracker.recordError(
+        'Global shortcut registration failed',
+        error,
+        stackTrace,
+      );
+      if (mounted) {
+        setState(() {
+          _shortcutRegistrationState = ShortcutRegistrationState.failed;
+          _shortcutRegistrationError = message;
+        });
+      }
+      rethrow;
+    }
+  }
+
+  void _handleShortcutServiceError(Object error) {
+    final message = 'Global shortcut service stopped: $error';
+    StartupErrorTracker.recordError('Global shortcut service error', error);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _inputServicesInitialized = false;
+      _shortcutRegistrationState = ShortcutRegistrationState.failed;
+      _shortcutRegistrationError = message;
+      _showSettings = true;
+      _state = RecorderState.error;
+      _lastError = message;
+    });
+    unawaited(_refreshTrayMenu());
+    unawaited(_showSettingsWindow());
+  }
+
+  String _shortcutFailureMessage(Object error) {
+    if (error is HotkeyRegistrationException) {
+      final shortcut = switch (error.shortcutId) {
+        'toggle-normal' => _shortcutConfig.normalLabel,
+        'toggle-plain' => _shortcutConfig.plainLabel,
+        _ => null,
+      };
+      final prefix = shortcut == null
+          ? 'Global shortcuts are unavailable.'
+          : 'Could not register $shortcut.';
+      return '$prefix ${error.message}';
+    }
+    return 'Global shortcuts are unavailable. $error';
+  }
+
+  Future<void> _retryShortcutRegistration() async {
+    if (_inputServicesInitializing || !_permissionsAuthorized) {
+      return;
+    }
+    _inputServicesInitialized = false;
+    await _initializeInputServices();
+    if (!mounted || !_inputServicesInitialized) {
+      return;
+    }
+    setState(() {
+      _state = RecorderState.ready;
+      _lastError = null;
+      _showSettings = false;
+    });
+    await _hideWindowAfterCapture();
   }
 
   Future<void> _loadConfig() async {
@@ -462,6 +643,16 @@ class _RecorderHomeState extends State<RecorderHome>
 
     final menu = Menu(
       items: [
+        if (_shortcutRegistrationState == ShortcutRegistrationState.failed)
+          MenuItem(
+            key: 'shortcut_status',
+            label: 'Global shortcuts unavailable',
+            disabled: true,
+          ),
+        if (_shortcutRegistrationState == ShortcutRegistrationState.failed)
+          MenuItem(key: 'retry_shortcuts', label: 'Retry global shortcuts'),
+        if (_shortcutRegistrationState == ShortcutRegistrationState.failed)
+          MenuItem.separator(),
         MenuItem(
           key: 'start_capture',
           label: _isRecording ? 'Recording' : 'Start capture',
@@ -629,7 +820,10 @@ class _RecorderHomeState extends State<RecorderHome>
       if (_supportsShortcutSettings) {
         await _configRepository.saveShortcutConfig(_shortcutConfig);
         if (_initializePlatformServices && _permissionsAuthorized) {
+          _inputServicesInitialized = false;
           await _registerHotkeys();
+          _inputServicesInitialized = true;
+          await _refreshTrayMenu();
         }
       }
       if (!mounted) {
@@ -650,7 +844,9 @@ class _RecorderHomeState extends State<RecorderHome>
     } catch (error) {
       setState(() {
         _state = RecorderState.needsConfig;
-        _lastError = error.toString();
+        _lastError = error is HotkeyRegistrationException
+            ? _shortcutFailureMessage(error)
+            : error.toString();
       });
     }
   }
@@ -988,6 +1184,8 @@ class _RecorderHomeState extends State<RecorderHome>
         unawaited(_stopCapture());
       case 'settings':
         _openSettings();
+      case 'retry_shortcuts':
+        unawaited(_retryShortcutRegistration());
       case 'quit_app':
         unawaited(_quit());
     }
@@ -1033,7 +1231,10 @@ class _RecorderHomeState extends State<RecorderHome>
                 IconButton(
                   tooltip: 'Close',
                   onPressed:
-                      _config?.isComplete == true && _permissionsAuthorized
+                      _config?.isComplete == true &&
+                          _permissionsAuthorized &&
+                          _shortcutRegistrationState !=
+                              ShortcutRegistrationState.failed
                       ? () {
                           setState(() => _showSettings = false);
                           unawaited(_hideWindowAfterCapture());
@@ -1171,6 +1372,17 @@ class _RecorderHomeState extends State<RecorderHome>
         if (_availableUpdate != null) ...[
           const SizedBox(height: 12),
           _buildUpdateCard(context, _availableUpdate!),
+        ],
+        if (_shortcutRegistrationState == ShortcutRegistrationState.checking ||
+            _shortcutRegistrationState == ShortcutRegistrationState.failed) ...[
+          const SizedBox(height: 12),
+          ShortcutRegistrationNotice(
+            checking:
+                _shortcutRegistrationState ==
+                ShortcutRegistrationState.checking,
+            message: _shortcutRegistrationError,
+            onRetry: () => unawaited(_retryShortcutRegistration()),
+          ),
         ],
         if (_requiresDesktopPermissions) ...[
           const SizedBox(height: 20),

@@ -15,6 +15,26 @@ void main() {
     expect(const SttApp(), isA<Widget>());
   });
 
+  testWidgets('shortcut registration failure is actionable', (tester) async {
+    var retries = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ShortcutRegistrationNotice(
+            checking: false,
+            message: 'Could not register F8. Shortcut is already in use.',
+            onRetry: () => retries += 1,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Global shortcuts unavailable'), findsOneWidget);
+    expect(find.textContaining('Could not register F8'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Retry registration'));
+    expect(retries, 1);
+  });
+
   testWidgets('shortcut settings are visible when supported', (tester) async {
     await tester.pumpWidget(
       SttApp(

@@ -36,12 +36,14 @@ struct GlobalShortcutsPlugin {
   gboolean events_listening = FALSE;
   gboolean initialized = FALSE;
   guint token_counter = 0;
+  guint64 generation = 0;
 };
 
 struct PendingInitialize {
   GlobalShortcutsPlugin* plugin = nullptr;
   FlMethodCall* method_call = nullptr;
   std::vector<ShortcutSpec> shortcuts;
+  guint64 generation = 0;
 };
 
 enum class RequestKind {
@@ -113,9 +115,9 @@ gchar* next_token(GlobalShortcutsPlugin* plugin, const char* purpose) {
   return g_strdup_printf("sttapp_%s_%u", purpose, plugin->token_counter);
 }
 
-void respond_success(FlMethodCall* method_call) {
+void respond_success(FlMethodCall* method_call, FlValue* result = nullptr) {
   g_autoptr(GError) error = nullptr;
-  if (!fl_method_call_respond_success(method_call, nullptr, &error)) {
+  if (!fl_method_call_respond_success(method_call, result, &error)) {
     g_warning("Failed to send global shortcuts success response: %s",
               error->message);
   }
@@ -140,9 +142,40 @@ void free_pending_initialize(PendingInitialize* pending) {
   delete pending;
 }
 
-void finish_initialize_success(PendingInitialize* pending) {
+bool is_current_initialize(const PendingInitialize* pending) {
+  return pending->generation == pending->plugin->generation;
+}
+
+FlValue* registration_response(GVariant* results) {
+  FlValue* response = fl_value_new_map();
+  FlValue* registered_ids = fl_value_new_list();
+  GVariant* shortcuts = g_variant_lookup_value(
+      results, "shortcuts", G_VARIANT_TYPE("a(sa{sv})"));
+  if (shortcuts != nullptr) {
+    GVariantIter iter;
+    g_variant_iter_init(&iter, shortcuts);
+    const gchar* id = nullptr;
+    GVariant* properties = nullptr;
+    while (g_variant_iter_next(&iter, "(&s@a{sv})", &id, &properties)) {
+      fl_value_append_take(registered_ids, fl_value_new_string(id));
+      g_variant_unref(properties);
+    }
+    g_variant_unref(shortcuts);
+  }
+  fl_value_set_string_take(response, "registeredShortcutIds", registered_ids);
+  return response;
+}
+
+void finish_initialize_success(PendingInitialize* pending, GVariant* results) {
+  if (!is_current_initialize(pending)) {
+    respond_error(pending->method_call, "cancelled",
+                  "Global shortcut initialization was superseded");
+    free_pending_initialize(pending);
+    return;
+  }
   pending->plugin->initialized = TRUE;
-  respond_success(pending->method_call);
+  g_autoptr(FlValue) response = registration_response(results);
+  respond_success(pending->method_call, response);
   free_pending_initialize(pending);
 }
 
@@ -162,7 +195,7 @@ void close_session(GlobalShortcutsPlugin* plugin) {
     g_dbus_connection_call_sync(
         plugin->connection, kPortalBusName, plugin->session_handle,
         kSessionInterface, "Close", nullptr, nullptr, G_DBUS_CALL_FLAGS_NONE,
-        -1, nullptr, &error);
+        5000, nullptr, &error);
     if (error != nullptr) {
       g_warning("Failed to close global shortcuts portal session: %s",
                 error->message);
@@ -176,7 +209,9 @@ void close_session(GlobalShortcutsPlugin* plugin) {
 void finish_initialize_error(PendingInitialize* pending,
                              const char* code,
                              const char* message) {
-  close_session(pending->plugin);
+  if (is_current_initialize(pending)) {
+    close_session(pending->plugin);
+  }
   respond_error(pending->method_call, code, message);
   free_pending_initialize(pending);
 }
@@ -313,8 +348,8 @@ void bind_response_cb(GDBusConnection* connection,
 
   if (response == 0 &&
       response_has_all_shortcuts(results, pending->shortcuts)) {
+    finish_initialize_success(pending, results);
     g_variant_unref(results);
-    finish_initialize_success(pending);
     return;
   }
 
@@ -349,8 +384,8 @@ void list_response_cb(GDBusConnection* connection,
   g_dbus_connection_signal_unsubscribe(plugin->connection, subscription_id);
 
   if (response == 0 && response_has_all_shortcuts(results, pending->shortcuts)) {
+    finish_initialize_success(pending, results);
     g_variant_unref(results);
-    finish_initialize_success(pending);
     return;
   }
 
@@ -379,6 +414,13 @@ void create_response_cb(GDBusConnection* connection,
   g_variant_get(parameters, "(u@a{sv})", &response, &results);
 
   g_dbus_connection_signal_unsubscribe(plugin->connection, subscription_id);
+
+  if (!is_current_initialize(pending)) {
+    g_variant_unref(results);
+    finish_initialize_error(pending, "cancelled",
+                            "Global shortcut initialization was superseded");
+    return;
+  }
 
   if (response != 0) {
     g_variant_unref(results);
@@ -421,6 +463,12 @@ void create_response_cb(GDBusConnection* connection,
           finish_initialize_error(pending, "failed", error->message);
           return;
         }
+        if (!is_current_initialize(pending)) {
+          finish_initialize_error(
+              pending, "cancelled",
+              "Global shortcut initialization was superseded");
+          return;
+        }
 
         const gchar* request_handle = nullptr;
         g_variant_get(reply, "(&o)", &request_handle);
@@ -431,6 +479,11 @@ void create_response_cb(GDBusConnection* connection,
 }
 
 void start_bind_shortcuts(PendingInitialize* pending) {
+  if (!is_current_initialize(pending)) {
+    finish_initialize_error(pending, "cancelled",
+                            "Global shortcut initialization was superseded");
+    return;
+  }
   g_autofree gchar* token = next_token(pending->plugin, "bind");
   GVariantBuilder options;
   g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
@@ -467,6 +520,12 @@ void start_bind_shortcuts(PendingInitialize* pending) {
           finish_initialize_error(pending, "failed", error->message);
           return;
         }
+        if (!is_current_initialize(pending)) {
+          finish_initialize_error(
+              pending, "cancelled",
+              "Global shortcut initialization was superseded");
+          return;
+        }
 
         const gchar* request_handle = nullptr;
         g_variant_get(reply, "(&o)", &request_handle);
@@ -477,6 +536,11 @@ void start_bind_shortcuts(PendingInitialize* pending) {
 }
 
 void start_create_session(PendingInitialize* pending) {
+  if (!is_current_initialize(pending)) {
+    finish_initialize_error(pending, "cancelled",
+                            "Global shortcut initialization was superseded");
+    return;
+  }
   g_autofree gchar* handle_token = next_token(pending->plugin, "create");
   g_autofree gchar* session_token = next_token(pending->plugin, "session");
 
@@ -501,6 +565,12 @@ void start_create_session(PendingInitialize* pending) {
           finish_initialize_error(pending, "failed", error->message);
           return;
         }
+        if (!is_current_initialize(pending)) {
+          finish_initialize_error(
+              pending, "cancelled",
+              "Global shortcut initialization was superseded");
+          return;
+        }
 
         const gchar* request_handle = nullptr;
         g_variant_get(reply, "(&o)", &request_handle);
@@ -512,6 +582,7 @@ void start_create_session(PendingInitialize* pending) {
 
 void handle_initialize(GlobalShortcutsPlugin* plugin,
                        FlMethodCall* method_call) {
+  plugin->generation += 1;
   close_session(plugin);
 
   g_autoptr(GError) error = nullptr;
@@ -524,10 +595,12 @@ void handle_initialize(GlobalShortcutsPlugin* plugin,
   pending->plugin = plugin;
   pending->method_call = FL_METHOD_CALL(g_object_ref(method_call));
   pending->shortcuts = parse_shortcuts(fl_method_call_get_args(method_call));
+  pending->generation = plugin->generation;
   start_create_session(pending);
 }
 
 void handle_dispose(GlobalShortcutsPlugin* plugin, FlMethodCall* method_call) {
+  plugin->generation += 1;
   close_session(plugin);
   respond_success(method_call);
 }

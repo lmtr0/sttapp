@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "sttapp_global_shortcuts.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,12 +26,15 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  global_shortcuts_ = std::make_unique<SttappGlobalShortcuts>(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   return true;
 }
 
 void FlutterWindow::OnDestroy() {
+  global_shortcuts_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -42,6 +46,11 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_HOTKEY && global_shortcuts_ &&
+      global_shortcuts_->HandleHotKey(wparam)) {
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
