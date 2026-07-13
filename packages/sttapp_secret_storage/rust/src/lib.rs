@@ -261,6 +261,48 @@ fn clear_last_error() {
 }
 
 #[cfg(test)]
+mod ffi_contract_tests {
+    use super::*;
+
+    #[test]
+    fn api_version_matches_dart_contract() {
+        assert_eq!(sttapp_secret_storage_api_version(), 1);
+    }
+
+    #[test]
+    fn validate_key_accepts_non_blank_utf8() {
+        let key = CString::new("api-key-é").unwrap();
+
+        assert_eq!(unsafe { validate_key(key.as_ptr()) }.unwrap(), "api-key-é");
+    }
+
+    #[test]
+    fn c_string_rejects_invalid_utf8() {
+        let invalid_utf8 = [0xff_u8, 0];
+
+        let error = unsafe {
+            c_string(
+                invalid_utf8.as_ptr().cast::<c_char>(),
+                "secret storage value",
+            )
+        }
+        .unwrap_err();
+
+        assert!(error.starts_with("secret storage value was not valid UTF-8:"));
+    }
+
+    #[test]
+    fn string_to_raw_round_trips_utf8() {
+        let raw = string_to_raw("secret-é").unwrap();
+
+        let value = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+        unsafe { sttapp_secret_storage_string_free(raw) };
+
+        assert_eq!(value, "secret-é");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -47,6 +47,7 @@ jobs:
           workspaces: |
             packages/sttapp_audio/rust -> target
             packages/sttapp_input/rust -> target
+            packages/sttapp_secret_storage/rust -> target
 
       - name: Install Dart dependencies
         run: flutter pub get
@@ -81,6 +82,18 @@ jobs:
         run: dart test
         working-directory: packages/sttapp_input
 
+      - name: Install sttapp_secret_storage dependencies
+        run: dart pub get
+        working-directory: packages/sttapp_secret_storage
+
+      - name: Analyze sttapp_secret_storage package
+        run: dart analyze
+        working-directory: packages/sttapp_secret_storage
+
+      - name: Test sttapp_secret_storage package
+        run: dart test
+        working-directory: packages/sttapp_secret_storage
+
   rust:
     name: Rust tests
     runs-on: ubuntu-24.04
@@ -90,6 +103,7 @@ jobs:
         package:
           - sttapp_audio
           - sttapp_input
+          - sttapp_secret_storage
 
     steps:
       - name: Checkout
@@ -100,6 +114,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libasound2-dev \
+            libsecret-1-dev \
             libxkbcommon-dev \
             pkg-config
 
