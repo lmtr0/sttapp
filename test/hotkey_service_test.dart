@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:sttapp/services/config_repository.dart';
 import 'package:sttapp/services/hotkey_service.dart';
 import 'package:sttapp_input/sttapp_input.dart';
@@ -10,20 +9,25 @@ import 'package:sttapp_input/sttapp_input.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('portal backend maps shortcut events to paste modes', () async {
+  test('native backend confirms both shortcuts and maps events', () async {
     final events = StreamController<dynamic>();
     final calls = <String>[];
     final modes = <PasteMode>[];
-
-    final backend = PortalHotkeyBackend(
+    Object? initializeArguments;
+    final backend = NativeHotkeyBackend(
       eventStream: events.stream,
       invokeMethod: (method, arguments) async {
         calls.add(method);
+        if (method == 'initialize') {
+          initializeArguments = arguments;
+          return _completeRegistration;
+        }
+        return null;
       },
     );
 
-    await backend.initialize(
-      shortcutConfig: ShortcutConfig(),
+    final registration = await backend.initialize(
+      shortcutConfig: ShortcutConfig(keyId: 'f6'),
       onToggle: modes.add,
     );
     events
@@ -31,19 +35,29 @@ void main() {
       ..add(<String, Object>{'id': 'toggle-plain'})
       ..add(<String, Object>{'id': 'unknown'});
     await events.close();
-
     await pumpEventQueue();
 
     expect(calls, <String>['dispose', 'initialize']);
+    expect(registration.shortcutIds, <String>{'toggle-normal', 'toggle-plain'});
     expect(modes, <PasteMode>[PasteMode.normal, PasteMode.plain]);
+
+    final arguments = initializeArguments! as Map<String, Object>;
+    final shortcuts = arguments['shortcuts']! as List<Map<String, Object>>;
+    expect(shortcuts[0]['keyId'], 'f6');
+    expect(shortcuts[0]['preferredTrigger'], 'F6');
+    expect(shortcuts[0]['modifiers'], isEmpty);
+    expect(shortcuts[1]['preferredTrigger'], 'SHIFT+F6');
+    expect(shortcuts[1]['modifiers'], <String>['shift']);
   });
 
-  test('portal backend forwards stream errors', () async {
+  test('native backend forwards event stream errors', () async {
     final events = StreamController<dynamic>();
     final errors = <Object>[];
-    final backend = PortalHotkeyBackend(
+    final backend = NativeHotkeyBackend(
       eventStream: events.stream,
-      invokeMethod: (_, _) async {},
+      invokeMethod: (method, _) async {
+        return method == 'initialize' ? _completeRegistration : null;
+      },
     );
 
     await backend.initialize(
@@ -53,7 +67,6 @@ void main() {
     );
     events.addError(PlatformException(code: 'closed'));
     await events.close();
-
     await pumpEventQueue();
 
     expect(errors, hasLength(1));
@@ -61,15 +74,16 @@ void main() {
   });
 
   test(
-    'portal backend dispose cancels events and calls native dispose',
+    'native backend dispose cancels events and calls native dispose',
     () async {
       final events = StreamController<dynamic>();
       final calls = <String>[];
       final modes = <PasteMode>[];
-      final backend = PortalHotkeyBackend(
+      final backend = NativeHotkeyBackend(
         eventStream: events.stream,
-        invokeMethod: (method, arguments) async {
+        invokeMethod: (method, _) async {
           calls.add(method);
+          return method == 'initialize' ? _completeRegistration : null;
         },
       );
 
@@ -78,7 +92,6 @@ void main() {
         onToggle: modes.add,
       );
       await backend.dispose();
-
       events.add(<String, Object>{'id': 'toggle-normal'});
       await events.close();
       await pumpEventQueue();
@@ -88,86 +101,102 @@ void main() {
     },
   );
 
-  test('hotkey manager backend registers configured key pair', () async {
-    final registrar = _FakeHotkeyRegistrar();
-    final backend = HotkeyManagerBackend(registrar: registrar);
-    final modes = <PasteMode>[];
-
-    await backend.initialize(
-      shortcutConfig: ShortcutConfig(keyId: 'f6'),
-      onToggle: modes.add,
-    );
-
-    expect(registrar.registered, hasLength(2));
-    expect(registrar.registered[0].logicalKey, LogicalKeyboardKey.f6);
-    expect(registrar.registered[0].modifiers, isEmpty);
-    expect(registrar.registered[1].logicalKey, LogicalKeyboardKey.f6);
-    expect(registrar.registered[1].modifiers, [HotKeyModifier.shift]);
-
-    registrar.handlers[0](registrar.registered[0]);
-    registrar.handlers[1](registrar.registered[1]);
-    expect(modes, [PasteMode.normal, PasteMode.plain]);
-  });
-
   test(
-    'hotkey manager backend unregisters old keys before reinitialize',
+    'native backend rejects incomplete registration and cleans up',
     () async {
-      final registrar = _FakeHotkeyRegistrar();
-      final backend = HotkeyManagerBackend(registrar: registrar);
-
-      await backend.initialize(
-        shortcutConfig: ShortcutConfig(keyId: 'f5'),
-        onToggle: (_) {},
+      final calls = <String>[];
+      final backend = NativeHotkeyBackend(
+        eventStream: const Stream<dynamic>.empty(),
+        invokeMethod: (method, _) async {
+          calls.add(method);
+          if (method == 'initialize') {
+            return <String, Object>{
+              'registeredShortcutIds': <String>['toggle-normal'],
+            };
+          }
+          return null;
+        },
       );
-      final oldKeys = List<HotKey>.of(registrar.registered);
-      await backend.initialize(
-        shortcutConfig: ShortcutConfig(keyId: 'f7'),
-        onToggle: (_) {},
-      );
 
-      expect(registrar.unregistered, oldKeys);
-      expect(registrar.registered.last.logicalKey, LogicalKeyboardKey.f7);
+      await expectLater(
+        backend.initialize(shortcutConfig: ShortcutConfig(), onToggle: (_) {}),
+        throwsA(
+          isA<HotkeyRegistrationException>()
+              .having((error) => error.code, 'code', 'incomplete_registration')
+              .having(
+                (error) => error.shortcutId,
+                'shortcutId',
+                'toggle-plain',
+              ),
+        ),
+      );
+      expect(calls, <String>['dispose', 'initialize', 'dispose']);
     },
   );
 
-  test('hotkey manager backend rolls back partial registration', () async {
-    final registrar = _FakeHotkeyRegistrar(failRegistrationAt: 2);
-    final backend = HotkeyManagerBackend(registrar: registrar);
+  test('native registration error retains the failed shortcut id', () async {
+    final calls = <String>[];
+    final backend = NativeHotkeyBackend(
+      eventStream: const Stream<dynamic>.empty(),
+      invokeMethod: (method, _) async {
+        calls.add(method);
+        if (method == 'initialize') {
+          throw PlatformException(
+            code: 'registration_failed',
+            message: 'Shortcut is already in use.',
+            details: <String, Object>{
+              'shortcutId': 'toggle-plain',
+              'nativeErrorCode': 1409,
+            },
+          );
+        }
+        return null;
+      },
+    );
 
     await expectLater(
       backend.initialize(shortcutConfig: ShortcutConfig(), onToggle: (_) {}),
-      throwsStateError,
+      throwsA(
+        isA<HotkeyRegistrationException>()
+            .having((error) => error.code, 'code', 'registration_failed')
+            .having((error) => error.shortcutId, 'shortcutId', 'toggle-plain'),
+      ),
     );
-
-    expect(registrar.registered, isEmpty);
-    expect(registrar.unregistered, hasLength(1));
+    expect(calls, <String>['dispose', 'initialize', 'dispose']);
   });
+
+  test(
+    'native registration times out and disposes the native session',
+    () async {
+      final calls = <String>[];
+      final pending = Completer<dynamic>();
+      final backend = NativeHotkeyBackend(
+        eventStream: const Stream<dynamic>.empty(),
+        registrationTimeout: const Duration(milliseconds: 1),
+        invokeMethod: (method, _) async {
+          calls.add(method);
+          if (method == 'initialize') {
+            return pending.future;
+          }
+          return null;
+        },
+      );
+
+      await expectLater(
+        backend.initialize(shortcutConfig: ShortcutConfig(), onToggle: (_) {}),
+        throwsA(
+          isA<HotkeyRegistrationException>().having(
+            (error) => error.code,
+            'code',
+            'timeout',
+          ),
+        ),
+      );
+      expect(calls, <String>['dispose', 'initialize', 'dispose']);
+    },
+  );
 }
 
-final class _FakeHotkeyRegistrar implements HotkeyRegistrar {
-  _FakeHotkeyRegistrar({this.failRegistrationAt});
-
-  final int? failRegistrationAt;
-  final registered = <HotKey>[];
-  final unregistered = <HotKey>[];
-  final handlers = <HotKeyHandler>[];
-  int _registrationCount = 0;
-
-  @override
-  Future<void> register(HotKey hotKey, {HotKeyHandler? keyDownHandler}) async {
-    _registrationCount += 1;
-    if (_registrationCount == failRegistrationAt) {
-      throw StateError('registration failed');
-    }
-    registered.add(hotKey);
-    if (keyDownHandler != null) {
-      handlers.add(keyDownHandler);
-    }
-  }
-
-  @override
-  Future<void> unregister(HotKey hotKey) async {
-    unregistered.add(hotKey);
-    registered.removeWhere((registered) => registered == hotKey);
-  }
-}
+const _completeRegistration = <String, Object>{
+  'registeredShortcutIds': <String>['toggle-normal', 'toggle-plain'],
+};

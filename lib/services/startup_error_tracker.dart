@@ -39,6 +39,10 @@ final class StartupErrorTracker {
     _write(buffer.toString().trimRight());
   }
 
+  static void recordEvent(String message) {
+    _write(message);
+  }
+
   static void _installFlutterErrorHandler() {
     final previous = FlutterError.onError;
     FlutterError.onError = (details) {

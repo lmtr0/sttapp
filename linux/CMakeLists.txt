@@ -74,12 +74,6 @@ set_target_properties(${BINARY_NAME}
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
-if(TARGET hotkey_manager_linux_plugin AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  target_compile_options(hotkey_manager_linux_plugin PRIVATE
-    -Wno-sometimes-uninitialized)
-endif()
-
-
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
 # directory.

@@ -58,6 +58,9 @@ jobs:
       - name: Test app
         run: flutter test --no-pub
 
+      - name: Build Flutter Linux application
+        run: flutter build linux --release --no-pub
+
       - name: Install sttapp_audio dependencies
         run: dart pub get
         working-directory: packages/sttapp_audio
@@ -214,6 +217,47 @@ jobs:
           }
 
           Stop-Process -Id $app.Id -Force
+
+  macos:
+    name: macOS build
+    runs-on: macos-15-intel
+    env:
+      STTAPP_RUST_BUILDER: zigbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            packages/sttapp_audio/rust -> target
+            packages/sttapp_input/rust -> target
+            packages/sttapp_secret_storage/rust -> target
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Build Flutter macOS application
+        run: flutter build macos --release --no-pub
 
   rust:
     name: Rust tests

@@ -71,6 +71,16 @@ If the app does not open, its early native and Dart startup diagnostics are in
 `%LOCALAPPDATA%\sttapp\startup.log`. Installer diagnostics can be captured by
 running the setup executable with `/LOG="sttapp-installer.log"`.
 
+## Troubleshooting global shortcuts
+
+The app verifies both global shortcuts whenever it starts. If the operating
+system rejects either shortcut, the settings window stays open with the failed
+combination and a **Retry registration** action. Release the shortcut in the
+other application, or select another function key on macOS and Windows, then
+retry. Registration attempts and shortcut activation events are written to the
+startup log (`%LOCALAPPDATA%\sttapp\startup.log` on Windows and
+`$TMPDIR/sttapp/startup.log` on Linux and macOS).
+
 ## Installing on macOS
 
 macOS releases are distributed as a single universal DMG that runs natively on
