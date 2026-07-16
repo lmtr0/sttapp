@@ -1,0 +1,38 @@
+import 'package:sttapp/services/config_repository.dart';
+import 'package:sttapp/services/hosted_backend_client.dart';
+import 'package:sttapp/services/transcription_service.dart';
+import 'package:sttapp_audio/sttapp_audio.dart';
+
+final class TranscriptionCoordinator {
+  const TranscriptionCoordinator({
+    required this.manual,
+    required this.hosted,
+    required this.hostedSession,
+  });
+
+  final TranscriptionService manual;
+  final HostedBackendClient hosted;
+  final HostedSessionManager hostedSession;
+
+  Future<String> transcribe({
+    required AudioClip clip,
+    required ProviderSetupState setup,
+    required TranscriptionConfig manualConfig,
+  }) async {
+    switch (setup.providerMode) {
+      case TranscriptionProviderMode.manual:
+        return manual.transcribe(clip, manualConfig);
+      case TranscriptionProviderMode.hosted:
+        final model = setup.hostedModel;
+        if (model == null || model.isEmpty) {
+          throw const ConfigException('A hosted model is required.');
+        }
+        final bytes = await clip.toFlacBytes();
+        return hostedSession.authorized(
+          (token) => hosted.transcribe(token, bytes, model),
+        );
+      case TranscriptionProviderMode.unset:
+        throw const ConfigException('Choose a transcription provider.');
+    }
+  }
+}

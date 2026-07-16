@@ -10,6 +10,60 @@ permissions:
   contents: read
 
 jobs:
+  backend:
+    name: Deno backend checks
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: sttapp_test
+          POSTGRES_USER: sttapp
+          POSTGRES_PASSWORD: sttapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sttapp -d sttapp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sttapp:sttapp@127.0.0.1:5432/sttapp_test
+      TEST_DATABASE_URL: postgres://sttapp:sttapp@127.0.0.1:5432/sttapp_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.3
+      - name: Install locked backend dependencies
+        run: deno ci
+        working-directory: backend
+      - name: Verify backend
+        run: deno task verify
+        working-directory: backend
+      - name: Verify migrations forward, down, and forward
+        run: |
+          deno task migrate
+          deno task test:integration
+          deno task migrate:down
+          deno task migrate
+        working-directory: backend
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan repository
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   flutter:
     name: Flutter checks
     runs-on: ubuntu-24.04

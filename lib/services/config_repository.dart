@@ -172,6 +172,8 @@ final class ConfigRepository {
   final Map<String, String> _environment;
   final List<File>? legacySettingsFiles;
 
+  ConfigStore get store => _store;
+
   Future<TranscriptionConfig> load() async {
     await migrateLegacyTauriConfigIfNeeded();
 
@@ -305,6 +307,250 @@ final class ConfigRepository {
 
   static String _legacyString(Object? value) {
     return value is String ? value.trim() : '';
+  }
+}
+
+enum TranscriptionProviderMode { unset, hosted, manual }
+
+enum SetupDraftStep { choose, hosted, manual, permissions, ready }
+
+final class ProviderSetupState {
+  const ProviderSetupState({
+    required this.providerMode,
+    required this.draftStep,
+    required this.hostedModel,
+    required this.completedVersion,
+  });
+
+  static const currentVersion = 1;
+  final TranscriptionProviderMode providerMode;
+  final SetupDraftStep draftStep;
+  final String? hostedModel;
+  final int? completedVersion;
+
+  bool get isComplete =>
+      completedVersion == currentVersion &&
+      providerMode != TranscriptionProviderMode.unset &&
+      (providerMode != TranscriptionProviderMode.hosted ||
+          (hostedModel != null && hostedModel!.isNotEmpty));
+
+  ProviderSetupState copyWith({
+    TranscriptionProviderMode? providerMode,
+    SetupDraftStep? draftStep,
+    String? hostedModel,
+    int? completedVersion,
+  }) => ProviderSetupState(
+    providerMode: providerMode ?? this.providerMode,
+    draftStep: draftStep ?? this.draftStep,
+    hostedModel: hostedModel ?? this.hostedModel,
+    completedVersion: completedVersion ?? this.completedVersion,
+  );
+}
+
+final class ProviderSetupRepository {
+  ProviderSetupRepository(this._store);
+
+  static const _modeKey = 'provider_mode';
+  static const _draftStepKey = 'setup_draft_step';
+  static const _completedVersionKey = 'setup_version_completed';
+  static const _hostedModelKey = 'hosted_model';
+  final ConfigStore _store;
+
+  Future<ProviderSetupState> load({required TranscriptionConfig manual}) async {
+    final mode = _parseMode(await _store.read(_modeKey));
+    final version = int.tryParse(
+      (await _store.read(_completedVersionKey)) ?? '',
+    );
+    if (mode == TranscriptionProviderMode.unset && manual.isComplete) {
+      final migrated = const ProviderSetupState(
+        providerMode: TranscriptionProviderMode.manual,
+        draftStep: SetupDraftStep.ready,
+        hostedModel: null,
+        completedVersion: ProviderSetupState.currentVersion,
+      );
+      await save(migrated);
+      return migrated;
+    }
+    return ProviderSetupState(
+      providerMode: mode,
+      draftStep: _parseStep(await _store.read(_draftStepKey)),
+      hostedModel: _nonEmpty(await _store.read(_hostedModelKey)),
+      completedVersion: version,
+    );
+  }
+
+  Future<void> save(ProviderSetupState state) async {
+    await _store.write(_modeKey, state.providerMode.name);
+    await _store.write(_draftStepKey, state.draftStep.name);
+    await _store.write(_hostedModelKey, state.hostedModel ?? '');
+    await _store.write(
+      _completedVersionKey,
+      state.completedVersion?.toString() ?? '',
+    );
+  }
+
+  Future<ProviderSetupState> complete({
+    required TranscriptionProviderMode mode,
+    String? hostedModel,
+    TranscriptionConfig? manualConfig,
+  }) async {
+    if (mode == TranscriptionProviderMode.unset) {
+      throw const ConfigException('A transcription provider is required.');
+    }
+    if (mode == TranscriptionProviderMode.hosted &&
+        (hostedModel == null || hostedModel.trim().isEmpty)) {
+      throw const ConfigException('A hosted model is required.');
+    }
+    if (mode == TranscriptionProviderMode.manual) {
+      if (manualConfig == null) {
+        throw const ConfigException('Manual provider settings are required.');
+      }
+      manualConfig.validate();
+    }
+    final state = ProviderSetupState(
+      providerMode: mode,
+      draftStep: SetupDraftStep.ready,
+      hostedModel: _nonEmpty(hostedModel),
+      completedVersion: ProviderSetupState.currentVersion,
+    );
+    await save(state);
+    return state;
+  }
+
+  static TranscriptionProviderMode _parseMode(String? value) =>
+      TranscriptionProviderMode.values.firstWhere(
+        (item) => item.name == value,
+        orElse: () => TranscriptionProviderMode.unset,
+      );
+
+  static SetupDraftStep _parseStep(String? value) =>
+      SetupDraftStep.values.firstWhere(
+        (item) => item.name == value,
+        orElse: () => SetupDraftStep.choose,
+      );
+
+  static String? _nonEmpty(String? value) {
+    final normalized = value?.trim();
+    return normalized == null || normalized.isEmpty ? null : normalized;
+  }
+}
+
+final class HostedCredentials {
+  const HostedCredentials({
+    required this.accessToken,
+    required this.accessTokenExpiresAt,
+    required this.refreshToken,
+    required this.sessionId,
+  });
+
+  final String accessToken;
+  final DateTime accessTokenExpiresAt;
+  final String refreshToken;
+  final String sessionId;
+
+  bool expiresSoon(DateTime now) =>
+      accessTokenExpiresAt.isBefore(now.add(const Duration(seconds: 60)));
+}
+
+final class HostedCredentialRepository {
+  HostedCredentialRepository(this._store);
+
+  static const _accessKey = 'hosted_access_token';
+  static const _accessExpiryKey = 'hosted_access_token_expires_at';
+  static const _refreshKey = 'hosted_refresh_token';
+  static const _sessionKey = 'hosted_session_id';
+  static const _credentialsKey = 'hosted_credentials_v1';
+  final ConfigStore _store;
+
+  Future<HostedCredentials?> load() async {
+    final encoded = (await _store.read(_credentialsKey))?.trim() ?? '';
+    if (encoded.isNotEmpty) {
+      try {
+        final value = jsonDecode(encoded);
+        if (value is Map<String, dynamic>) {
+          if (value['cleared'] == true) return null;
+          final access = value['access_token'];
+          final refresh = value['refresh_token'];
+          final session = value['session_id'];
+          final expiry = DateTime.tryParse(
+            value['access_token_expires_at'] is String
+                ? value['access_token_expires_at'] as String
+                : '',
+          );
+          if (access is String &&
+              access.isNotEmpty &&
+              refresh is String &&
+              refresh.isNotEmpty &&
+              session is String &&
+              session.isNotEmpty &&
+              expiry != null) {
+            return HostedCredentials(
+              accessToken: access,
+              accessTokenExpiresAt: expiry.toUtc(),
+              refreshToken: refresh,
+              sessionId: session,
+            );
+          }
+        }
+      } catch (_) {
+        // Fall through to the legacy multi-key format for one-time migration.
+      }
+    }
+    final access = (await _store.read(_accessKey))?.trim() ?? '';
+    final refresh = (await _store.read(_refreshKey))?.trim() ?? '';
+    final session = (await _store.read(_sessionKey))?.trim() ?? '';
+    final expiry = DateTime.tryParse(
+      (await _store.read(_accessExpiryKey)) ?? '',
+    );
+    if (access.isEmpty ||
+        refresh.isEmpty ||
+        session.isEmpty ||
+        expiry == null) {
+      return null;
+    }
+    final credentials = HostedCredentials(
+      accessToken: access,
+      accessTokenExpiresAt: expiry.toUtc(),
+      refreshToken: refresh,
+      sessionId: session,
+    );
+    await save(credentials);
+    return credentials;
+  }
+
+  Future<void> save(HostedCredentials credentials) async {
+    await _store.write(
+      _credentialsKey,
+      jsonEncode({
+        'access_token': credentials.accessToken,
+        'access_token_expires_at': credentials.accessTokenExpiresAt
+            .toUtc()
+            .toIso8601String(),
+        'refresh_token': credentials.refreshToken,
+        'session_id': credentials.sessionId,
+      }),
+    );
+    await _clearLegacyKeys();
+  }
+
+  Future<void> clear() async {
+    await _store.write(_credentialsKey, jsonEncode({'cleared': true}));
+    await _clearLegacyKeys();
+  }
+
+  Future<void> _clearLegacyKeys() async {
+    for (final key in [
+      _accessKey,
+      _accessExpiryKey,
+      _refreshKey,
+      _sessionKey,
+    ]) {
+      try {
+        await _store.write(key, '');
+      } catch (_) {
+        // The single credentials item is authoritative after migration/clear.
+      }
+    }
   }
 }
 

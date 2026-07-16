@@ -4,6 +4,11 @@ System-wide speech-to-text desktop app built with Flutter and rust pluggins. (Cu
 
 sttapp records audio, transcribes it with an OpenAI-compatible API, copies the transcript to the clipboard, and can paste it into the active application. The app supports global shortcuts, tray controls, and local settings storage.
 
+The repository also contains an optional hosted-service backend. Manual-provider
+credentials remain local and are never sent to the hosted backend. See
+[`backend/README.md`](backend/README.md) for its architecture and development
+workflow.
+
 Recommendation to use Groq's `Whisper 3 large turbo` for the best experience.
 
 ## Pre-built Binaries
@@ -112,8 +117,9 @@ changing the universal build or DMG layout.
 ## Project Layout
 
 - `lib/` contains the Flutter app.
+- `backend/` contains the optional Deno/PostgreSQL hosted service.
 - `packages/sttapp_audio/` contains the native audio and FLAC package.
 - `packages/sttapp_input/` contains native input and paste helpers.
-- - `packages/sttapp_secret_store/` contains native secret store implementation helpers.
+- `packages/sttapp_secret_storage/` contains native secret-store implementation helpers.
 - `linux/`, `macos/`, and `windows/` contain desktop platform runners.
 - `.github/workflows/` contains CI and release publishing workflows.

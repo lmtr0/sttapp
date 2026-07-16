@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: sttapp
+      POSTGRES_USER: sttapp
+      POSTGRES_PASSWORD: sttapp
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sttapp -d sttapp"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - sttapp-postgres:/var/lib/postgresql/data
+
+volumes:
+  sttapp-postgres:

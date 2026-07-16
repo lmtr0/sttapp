@@ -1,18 +1,14 @@
-export function handler(req: Request): Response {
-  const url = new URL(req.url);
+import { createApplication } from "./src/app.ts";
+import { loadConfig } from "./src/config.ts";
+import { createProductionDependencies } from "./src/dependencies.ts";
 
-  if (url.pathname === "/api") {
-    return Response.json({
-      message: "Hello, world!",
-      time: new Date().toISOString(),
-    });
-  }
-
-  return new Response("<h1>Welcome to Deno!</h1>", {
-    headers: { "content-type": "text/html" },
-  });
-}
+export { createApplication } from "./src/app.ts";
+export type { AppDependencies } from "./src/dependencies.ts";
 
 if (import.meta.main) {
-  Deno.serve(handler);
+  const config = loadConfig(Deno.env.toObject());
+  const dependencies = await createProductionDependencies(config);
+  const handler = createApplication(dependencies);
+  console.log(JSON.stringify({ event: "server.started", port: config.port }));
+  Deno.serve({ port: config.port }, handler);
 }

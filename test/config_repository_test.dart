@@ -4,9 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sttapp/services/config_repository.dart';
 
 void main() {
-  test('secure config store can be constructed without touching native storage', () {
-    expect(SecureConfigStore(), isA<SecureConfigStore>());
-  });
+  test(
+    'secure config store can be constructed without touching native storage',
+    () {
+      expect(SecureConfigStore(), isA<SecureConfigStore>());
+    },
+  );
 
   test('normalizes base URL and validates required fields', () {
     final config = TranscriptionConfig(
@@ -171,5 +174,63 @@ void main() {
     expect(config.apiKey, 'stored-key');
     expect(config.baseUrl, 'https://stored.example/v1');
     expect(config.model, 'stored-model');
+  });
+
+  test(
+    'valid legacy manual config migrates to completed manual mode',
+    () async {
+      final store = MemoryConfigStore();
+      final setup = ProviderSetupRepository(store);
+      final state = await setup.load(
+        manual: TranscriptionConfig(
+          apiKey: 'key',
+          baseUrl: 'https://manual.example/v1',
+          model: 'whisper',
+        ),
+      );
+
+      expect(state.providerMode, TranscriptionProviderMode.manual);
+      expect(state.isComplete, isTrue);
+      expect(await store.read('provider_mode'), 'manual');
+    },
+  );
+
+  test('fresh setup is unset and hosted completion requires a model', () async {
+    final setup = ProviderSetupRepository(MemoryConfigStore());
+    final state = await setup.load(
+      manual: TranscriptionConfig(
+        apiKey: '',
+        baseUrl: defaultOpenAiBaseUrl,
+        model: '',
+      ),
+    );
+
+    expect(state.providerMode, TranscriptionProviderMode.unset);
+    expect(state.isComplete, isFalse);
+    await expectLater(
+      setup.complete(mode: TranscriptionProviderMode.hosted),
+      throwsA(isA<ConfigException>()),
+    );
+    await expectLater(
+      setup.complete(mode: TranscriptionProviderMode.manual),
+      throwsA(isA<ConfigException>()),
+    );
+  });
+
+  test('hosted credentials use distinct keys and clear atomically', () async {
+    final store = MemoryConfigStore({'openai_api_key': 'manual-secret'});
+    final repository = HostedCredentialRepository(store);
+    final credentials = HostedCredentials(
+      accessToken: 'access',
+      accessTokenExpiresAt: DateTime.utc(2030),
+      refreshToken: 'refresh',
+      sessionId: 'session',
+    );
+
+    await repository.save(credentials);
+    expect((await repository.load())?.refreshToken, 'refresh');
+    await repository.clear();
+    expect(await repository.load(), isNull);
+    expect(await store.read('openai_api_key'), 'manual-secret');
   });
 }

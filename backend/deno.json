@@ -1,8 +1,35 @@
 {
+  "lock": true,
+  "fmt": {
+    "exclude": [
+      "coverage",
+      "Product_Plan.md",
+      "Setup_UI_Plan.md",
+      "Tasks.md"
+    ]
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"], "exclude": ["require-await"] }
+  },
   "tasks": {
-    "dev": "deno run --watch --allow-net main.ts"
+    "dev": "deno run --watch --allow-env --allow-net --allow-read main.ts",
+    "start": "deno run --allow-env --allow-net --allow-read main.ts",
+    "fmt": "deno fmt",
+    "fmt:check": "deno fmt --check",
+    "lint": "deno lint",
+    "check": "deno check main.ts src/**/*.ts tests/**/*.ts",
+    "test": "deno test --allow-env --allow-read tests/*.ts",
+    "test:integration": "deno test --allow-env --allow-net --allow-read tests/integration",
+    "test:all": "deno task test && deno task test:integration",
+    "migrate": "deno run --allow-env --allow-net --allow-read src/db/migrate.ts up",
+    "migrate:down": "deno run --allow-env --allow-net --allow-read src/db/migrate.ts down",
+    "jobs": "deno run --allow-env --allow-net --allow-read src/jobs/runner.ts",
+    "audit": "deno audit --lock=deno.lock",
+    "verify": "deno task fmt:check && deno task lint && deno task check && deno task audit && deno task test"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1.0.19",
+    "jose": "npm:jose@6.2.3",
+    "postgres": "npm:postgres@3.4.9"
   }
 }
