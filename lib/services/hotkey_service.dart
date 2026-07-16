@@ -12,6 +12,12 @@ typedef NativeShortcutInvokeMethod =
 const _normalShortcutId = 'toggle-normal';
 const _plainShortcutId = 'toggle-plain';
 const _expectedShortcutIds = <String>{_normalShortcutId, _plainShortcutId};
+const _registrationRetryDelays = <Duration>[
+  Duration(seconds: 2),
+  Duration(seconds: 4),
+];
+
+Future<void> _defaultRetryDelay(Duration delay) => Future<void>.delayed(delay);
 
 final class HotkeyRegistrationResult {
   const HotkeyRegistrationResult({required this.shortcutIds});
@@ -52,21 +58,34 @@ abstract interface class HotkeyBackend {
 }
 
 final class HotkeyService {
-  HotkeyService({HotkeyBackend? backend})
-    : _backend = backend ?? NativeHotkeyBackend();
+  HotkeyService({
+    HotkeyBackend? backend,
+    Future<void> Function(Duration delay)? retryDelay,
+  }) : _backend = backend ?? NativeHotkeyBackend(),
+       _retryDelay = retryDelay ?? _defaultRetryDelay;
 
   final HotkeyBackend _backend;
+  final Future<void> Function(Duration delay) _retryDelay;
 
   Future<HotkeyRegistrationResult> initialize({
     ShortcutConfig? shortcutConfig,
     required PasteModeCallback onToggle,
     HotkeyErrorCallback? onError,
-  }) {
-    return _backend.initialize(
-      shortcutConfig: shortcutConfig ?? ShortcutConfig(),
-      onToggle: onToggle,
-      onError: onError,
-    );
+  }) async {
+    for (var attempt = 0; ; attempt += 1) {
+      try {
+        return await _backend.initialize(
+          shortcutConfig: shortcutConfig ?? ShortcutConfig(),
+          onToggle: onToggle,
+          onError: onError,
+        );
+      } on HotkeyRegistrationException {
+        if (attempt >= _registrationRetryDelays.length) {
+          rethrow;
+        }
+        await _retryDelay(_registrationRetryDelays[attempt]);
+      }
+    }
   }
 
   Future<void> dispose() => _backend.dispose();

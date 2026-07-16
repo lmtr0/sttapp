@@ -9,6 +9,84 @@ import 'package:sttapp_input/sttapp_input.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('hotkey service succeeds without retrying', () async {
+    final backend = _SequenceHotkeyBackend(<Object>[_completeResult]);
+    final delays = <Duration>[];
+    final service = HotkeyService(
+      backend: backend,
+      retryDelay: (delay) async => delays.add(delay),
+    );
+
+    final registration = await service.initialize(onToggle: (_) {});
+
+    expect(registration.shortcutIds, _completeRegistrationIds);
+    expect(backend.initializeCalls, 1);
+    expect(delays, isEmpty);
+  });
+
+  test('hotkey service retries after two and four seconds', () async {
+    final backend = _SequenceHotkeyBackend(<Object>[
+      _registrationFailure('first'),
+      _registrationFailure('second'),
+      _completeResult,
+    ]);
+    final delays = <Duration>[];
+    final service = HotkeyService(
+      backend: backend,
+      retryDelay: (delay) async => delays.add(delay),
+    );
+
+    final registration = await service.initialize(onToggle: (_) {});
+
+    expect(registration.shortcutIds, _completeRegistrationIds);
+    expect(backend.initializeCalls, 3);
+    expect(delays, const <Duration>[
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+    ]);
+  });
+
+  test('hotkey service exposes only the third registration failure', () async {
+    final finalFailure = _registrationFailure('third');
+    final backend = _SequenceHotkeyBackend(<Object>[
+      _registrationFailure('first'),
+      _registrationFailure('second'),
+      finalFailure,
+    ]);
+    final delays = <Duration>[];
+    final service = HotkeyService(
+      backend: backend,
+      retryDelay: (delay) async => delays.add(delay),
+    );
+
+    await expectLater(
+      service.initialize(onToggle: (_) {}),
+      throwsA(same(finalFailure)),
+    );
+    expect(backend.initializeCalls, 3);
+    expect(delays, const <Duration>[
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+    ]);
+  });
+
+  test('hotkey service does not retry unexpected failures', () async {
+    final failure = StateError('unexpected');
+    final backend = _SequenceHotkeyBackend(<Object>[failure]);
+    final delays = <Duration>[];
+    final service = HotkeyService(
+      backend: backend,
+      retryDelay: (delay) async => delays.add(delay),
+    );
+
+    await expectLater(
+      service.initialize(onToggle: (_) {}),
+      throwsA(same(failure)),
+    );
+    expect(backend.initializeCalls, 1);
+    expect(delays, isEmpty);
+  });
+
   test('native backend confirms both shortcuts and maps events', () async {
     final events = StreamController<dynamic>();
     final calls = <String>[];
@@ -200,3 +278,40 @@ void main() {
 const _completeRegistration = <String, Object>{
   'registeredShortcutIds': <String>['toggle-normal', 'toggle-plain'],
 };
+
+const _completeRegistrationIds = <String>{'toggle-normal', 'toggle-plain'};
+
+final _completeResult = HotkeyRegistrationResult(
+  shortcutIds: _completeRegistrationIds,
+);
+
+HotkeyRegistrationException _registrationFailure(String attempt) {
+  return HotkeyRegistrationException(
+    code: 'registration_failed',
+    message: '$attempt attempt failed',
+  );
+}
+
+final class _SequenceHotkeyBackend implements HotkeyBackend {
+  _SequenceHotkeyBackend(this.outcomes);
+
+  final List<Object> outcomes;
+  int initializeCalls = 0;
+
+  @override
+  Future<HotkeyRegistrationResult> initialize({
+    required ShortcutConfig shortcutConfig,
+    required PasteModeCallback onToggle,
+    HotkeyErrorCallback? onError,
+  }) async {
+    final outcome = outcomes[initializeCalls];
+    initializeCalls += 1;
+    if (outcome is HotkeyRegistrationResult) {
+      return outcome;
+    }
+    throw outcome;
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
