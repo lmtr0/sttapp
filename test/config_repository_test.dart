@@ -91,6 +91,30 @@ void main() {
     expect(config.model, 'stored-model');
   });
 
+  test(
+    'manual config save is atomic when legacy compatibility writes fail',
+    () async {
+      final store = _SelectiveFailureStore({
+        'openai_api_key',
+        'openai_base_url',
+        'openai_model',
+      });
+      final repository = ConfigRepository(store: store, environment: const {});
+      final expected = TranscriptionConfig(
+        apiKey: 'atomic-key',
+        baseUrl: 'https://atomic.example/v1',
+        model: 'atomic-model',
+      );
+
+      await repository.save(expected);
+      final loaded = await repository.load();
+
+      expect(loaded.apiKey, expected.apiKey);
+      expect(loaded.baseUrl, expected.baseUrl);
+      expect(loaded.model, expected.model);
+    },
+  );
+
   test('loads default shortcut when storage is empty', () async {
     final repository = ConfigRepository(
       store: MemoryConfigStore(),
@@ -195,26 +219,114 @@ void main() {
     },
   );
 
-  test('fresh setup is unset and hosted completion requires a model', () async {
-    final setup = ProviderSetupRepository(MemoryConfigStore());
-    final state = await setup.load(
-      manual: TranscriptionConfig(
-        apiKey: '',
-        baseUrl: defaultOpenAiBaseUrl,
-        model: '',
+  test(
+    'fresh setup defaults to incomplete hosted and completion requires a model',
+    () async {
+      final store = MemoryConfigStore();
+      final setup = ProviderSetupRepository(store);
+      final state = await setup.load(
+        manual: TranscriptionConfig(
+          apiKey: '',
+          baseUrl: defaultOpenAiBaseUrl,
+          model: '',
+        ),
+      );
+
+      expect(state.providerMode, TranscriptionProviderMode.hosted);
+      expect(state.draftStep, SetupDraftStep.hosted);
+      expect(state.isComplete, isFalse);
+      expect(await store.read('provider_mode'), 'hosted');
+      await expectLater(
+        setup.complete(mode: TranscriptionProviderMode.hosted),
+        throwsA(isA<ConfigException>()),
+      );
+      await expectLater(
+        setup.complete(
+          mode: TranscriptionProviderMode.hosted,
+          hostedModel: 'enabled-model',
+        ),
+        throwsA(isA<ConfigException>()),
+      );
+      await expectLater(
+        setup.complete(
+          mode: TranscriptionProviderMode.hosted,
+          hostedModel: 'disabled-model',
+          hostedAuthenticated: true,
+          enabledHostedModels: const ['enabled-model'],
+        ),
+        throwsA(isA<ConfigException>()),
+      );
+      await expectLater(
+        setup.complete(mode: TranscriptionProviderMode.manual),
+        throwsA(isA<ConfigException>()),
+      );
+    },
+  );
+
+  test(
+    'incomplete legacy manual fields do not override the hosted default',
+    () async {
+      final store = MemoryConfigStore({'openai_api_key': 'partial-key'});
+      final state = await ProviderSetupRepository(store).load(
+        manual: TranscriptionConfig(
+          apiKey: 'partial-key',
+          baseUrl: defaultOpenAiBaseUrl,
+          model: '',
+        ),
+      );
+
+      expect(state.providerMode, TranscriptionProviderMode.hosted);
+      expect(state.isComplete, isFalse);
+    },
+  );
+
+  test(
+    'an existing incomplete manual selection is never flipped to hosted',
+    () async {
+      final store = MemoryConfigStore({
+        'provider_mode': 'manual',
+        'setup_draft_step': 'manual',
+        'setup_version_completed': '',
+      });
+      final state = await ProviderSetupRepository(store).load(
+        manual: TranscriptionConfig(
+          apiKey: '',
+          baseUrl: defaultOpenAiBaseUrl,
+          model: '',
+        ),
+      );
+
+      expect(state.providerMode, TranscriptionProviderMode.manual);
+      expect(state.isComplete, isFalse);
+    },
+  );
+
+  test('provider setup save is atomic when legacy mirrors fail', () async {
+    final store = _SelectiveFailureStore({
+      'provider_mode',
+      'setup_draft_step',
+      'setup_version_completed',
+      'hosted_model',
+    });
+    final repository = ProviderSetupRepository(store);
+    await repository.complete(
+      mode: TranscriptionProviderMode.manual,
+      manualConfig: TranscriptionConfig(
+        apiKey: 'key',
+        baseUrl: 'https://manual.example/v1',
+        model: 'model',
       ),
     );
 
-    expect(state.providerMode, TranscriptionProviderMode.unset);
-    expect(state.isComplete, isFalse);
-    await expectLater(
-      setup.complete(mode: TranscriptionProviderMode.hosted),
-      throwsA(isA<ConfigException>()),
+    final loaded = await repository.load(
+      manual: TranscriptionConfig(
+        apiKey: 'key',
+        baseUrl: 'https://manual.example/v1',
+        model: 'model',
+      ),
     );
-    await expectLater(
-      setup.complete(mode: TranscriptionProviderMode.manual),
-      throwsA(isA<ConfigException>()),
-    );
+    expect(loaded.providerMode, TranscriptionProviderMode.manual);
+    expect(loaded.isComplete, isTrue);
   });
 
   test('hosted credentials use distinct keys and clear atomically', () async {
@@ -233,4 +345,20 @@ void main() {
     expect(await repository.load(), isNull);
     expect(await store.read('openai_api_key'), 'manual-secret');
   });
+}
+
+final class _SelectiveFailureStore implements ConfigStore {
+  _SelectiveFailureStore(this.failingKeys);
+
+  final Set<String> failingKeys;
+  final Map<String, String> values = {};
+
+  @override
+  Future<String?> read(String key) async => values[key];
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (failingKeys.contains(key)) throw StateError('write failed for $key');
+    values[key] = value;
+  }
 }

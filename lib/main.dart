@@ -4,11 +4,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sttapp/services/config_repository.dart';
+import 'package:sttapp/services/desktop_auth_service.dart';
 import 'package:sttapp/services/desktop_permission_service.dart';
+import 'package:sttapp/services/hosted_backend_client.dart';
 import 'package:sttapp/services/hotkey_service.dart';
 import 'package:sttapp/services/startup_error_tracker.dart';
 import 'package:sttapp/services/transcript_delivery_service.dart';
 import 'package:sttapp/services/transcription_service.dart';
+import 'package:sttapp/services/transcription_coordinator.dart';
 import 'package:sttapp/services/update_service.dart';
 import 'package:sttapp_audio/sttapp_audio.dart';
 import 'package:sttapp_input/sttapp_input.dart';
@@ -65,6 +68,12 @@ class SttApp extends StatelessWidget {
     super.key,
     this.configRepository,
     this.transcriptionService,
+    this.hostedBackendClient,
+    this.hostedCredentialRepository,
+    this.hostedSessionManager,
+    this.desktopAuthenticator,
+    this.providerSetupRepository,
+    this.transcriptionCoordinator,
     this.transcriptDeliveryService,
     this.hotkeyService,
     this.desktopPermissionService,
@@ -78,6 +87,12 @@ class SttApp extends StatelessWidget {
 
   final ConfigRepository? configRepository;
   final TranscriptionService? transcriptionService;
+  final HostedBackendClient? hostedBackendClient;
+  final HostedCredentialRepository? hostedCredentialRepository;
+  final HostedSessionManager? hostedSessionManager;
+  final DesktopAuthenticator? desktopAuthenticator;
+  final ProviderSetupRepository? providerSetupRepository;
+  final TranscriptionCoordinator? transcriptionCoordinator;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final DesktopPermissionService? desktopPermissionService;
@@ -97,9 +112,23 @@ class SttApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1967D2)),
         useMaterial3: true,
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1967D2),
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      themeMode: ThemeMode.system,
       home: RecorderHome(
         configRepository: configRepository,
         transcriptionService: transcriptionService,
+        hostedBackendClient: hostedBackendClient,
+        hostedCredentialRepository: hostedCredentialRepository,
+        hostedSessionManager: hostedSessionManager,
+        desktopAuthenticator: desktopAuthenticator,
+        providerSetupRepository: providerSetupRepository,
+        transcriptionCoordinator: transcriptionCoordinator,
         transcriptDeliveryService: transcriptDeliveryService,
         hotkeyService: hotkeyService,
         desktopPermissionService: desktopPermissionService,
@@ -188,6 +217,12 @@ class RecorderHome extends StatefulWidget {
     super.key,
     this.configRepository,
     this.transcriptionService,
+    this.hostedBackendClient,
+    this.hostedCredentialRepository,
+    this.hostedSessionManager,
+    this.desktopAuthenticator,
+    this.providerSetupRepository,
+    this.transcriptionCoordinator,
     this.transcriptDeliveryService,
     this.hotkeyService,
     this.desktopPermissionService,
@@ -201,6 +236,12 @@ class RecorderHome extends StatefulWidget {
 
   final ConfigRepository? configRepository;
   final TranscriptionService? transcriptionService;
+  final HostedBackendClient? hostedBackendClient;
+  final HostedCredentialRepository? hostedCredentialRepository;
+  final HostedSessionManager? hostedSessionManager;
+  final DesktopAuthenticator? desktopAuthenticator;
+  final ProviderSetupRepository? providerSetupRepository;
+  final TranscriptionCoordinator? transcriptionCoordinator;
   final TranscriptDeliveryService? transcriptDeliveryService;
   final HotkeyService? hotkeyService;
   final DesktopPermissionService? desktopPermissionService;
@@ -232,12 +273,19 @@ class _RecorderHomeState extends State<RecorderHome>
   late final AudioRecorder _recorder;
   late final ConfigRepository _configRepository;
   late final TranscriptionService _transcriptionService;
+  late final HostedBackendClient _hostedBackendClient;
+  late final HostedCredentialRepository _hostedCredentialRepository;
+  late final HostedSessionManager _hostedSessionManager;
+  late final DesktopAuthenticator _desktopAuthenticator;
+  late final ProviderSetupRepository _providerSetupRepository;
+  late final TranscriptionCoordinator _transcriptionCoordinator;
   late final TranscriptDeliveryService _transcriptDeliveryService;
   late final HotkeyService _hotkeyService;
   late final DesktopPermissionService _desktopPermissionService;
   late final UpdateService _updateService;
   late final ReleaseLauncher _releaseLauncher;
   late final bool _ownsTranscriptionService;
+  late final bool _ownsHostedBackendClient;
   late final bool _ownsUpdateService;
   late final bool _supportsShortcutSettings;
   late final bool _initializePlatformServices;
@@ -250,6 +298,14 @@ class _RecorderHomeState extends State<RecorderHome>
 
   AudioRecording? _recording;
   TranscriptionConfig? _config;
+  ProviderSetupState _providerSetup = const ProviderSetupState(
+    providerMode: TranscriptionProviderMode.hosted,
+    draftStep: SetupDraftStep.hosted,
+    hostedModel: null,
+    completedVersion: null,
+  );
+  HostedAccount? _hostedAccount;
+  List<String> _hostedModels = const [];
   ShortcutConfig _shortcutConfig = ShortcutConfig();
   RecorderState _state = RecorderState.ready;
   PasteMode _recordingPasteMode = PasteMode.normal;
@@ -266,6 +322,12 @@ class _RecorderHomeState extends State<RecorderHome>
   bool _showApiKey = false;
   bool _isTestingConnection = false;
   bool _isLoadingModels = false;
+  bool _hasHostedCredentials = false;
+  bool _isLoadingHosted = false;
+  bool _isSigningIn = false;
+  bool _isSwitchingProvider = false;
+  bool _isOpeningBilling = false;
+  String? _hostedStatus;
   bool _isQuitting = false;
   bool _isPermissionActionPending = false;
   bool _isRefreshingPermissions = false;
@@ -286,6 +348,22 @@ class _RecorderHomeState extends State<RecorderHome>
 
   bool get _canStart => !_isRecording && !_isTranscribing;
 
+  bool get _providerReady {
+    switch (_providerSetup.providerMode) {
+      case TranscriptionProviderMode.manual:
+        return _providerSetup.isComplete && _config?.isComplete == true;
+      case TranscriptionProviderMode.hosted:
+        final model = _providerSetup.hostedModel;
+        return _providerSetup.isComplete &&
+            _hasHostedCredentials &&
+            _hostedAccount?.hostedAvailable == true &&
+            model != null &&
+            _hostedModels.contains(model);
+      case TranscriptionProviderMode.unset:
+        return false;
+    }
+  }
+
   bool get _requiresDesktopPermissions =>
       _desktopPermissionService.requiresAuthorization;
 
@@ -298,8 +376,44 @@ class _RecorderHomeState extends State<RecorderHome>
     WidgetsBinding.instance.addObserver(this);
     _recorder = AudioRecorder();
     _configRepository = widget.configRepository ?? ConfigRepository();
+    final injectedCoordinator = widget.transcriptionCoordinator;
+    final injectedSession =
+        widget.hostedSessionManager ?? injectedCoordinator?.hostedSession;
     _transcriptionService =
-        widget.transcriptionService ?? TranscriptionService();
+        widget.transcriptionService ??
+        injectedCoordinator?.manual ??
+        TranscriptionService();
+    _hostedBackendClient =
+        widget.hostedBackendClient ??
+        injectedSession?.client ??
+        injectedCoordinator?.hosted ??
+        HostedBackendClient();
+    _hostedCredentialRepository =
+        widget.hostedCredentialRepository ??
+        injectedSession?.credentials ??
+        HostedCredentialRepository(_configRepository.store);
+    _hostedSessionManager =
+        injectedSession ??
+        HostedSessionManager(
+          client: _hostedBackendClient,
+          credentials: _hostedCredentialRepository,
+        );
+    _desktopAuthenticator =
+        widget.desktopAuthenticator ??
+        DesktopAuthService(
+          client: _hostedBackendClient,
+          launchBrowser: _launchRelease,
+        );
+    _providerSetupRepository =
+        widget.providerSetupRepository ??
+        ProviderSetupRepository(_configRepository.store);
+    _transcriptionCoordinator =
+        injectedCoordinator ??
+        TranscriptionCoordinator(
+          manual: _transcriptionService,
+          hosted: _hostedBackendClient,
+          hostedSession: _hostedSessionManager,
+        );
     _transcriptDeliveryService =
         widget.transcriptDeliveryService ?? const TranscriptDeliveryService();
     _hotkeyService = widget.hotkeyService ?? HotkeyService();
@@ -320,7 +434,12 @@ class _RecorderHomeState extends State<RecorderHome>
     if (_desktopPermissionService.requiresAuthorization) {
       _permissionStatus = const DesktopPermissionSnapshot.unavailable();
     }
-    _ownsTranscriptionService = widget.transcriptionService == null;
+    _ownsTranscriptionService =
+        widget.transcriptionService == null && injectedCoordinator == null;
+    _ownsHostedBackendClient =
+        widget.hostedBackendClient == null &&
+        injectedSession == null &&
+        injectedCoordinator == null;
     _ownsUpdateService = widget.updateService == null;
     _supportsShortcutSettings =
         widget.supportsShortcutSettings ?? !Platform.isLinux;
@@ -342,6 +461,10 @@ class _RecorderHomeState extends State<RecorderHome>
     unawaited(_hotkeyService.dispose());
     if (_ownsTranscriptionService) {
       _transcriptionService.close();
+    }
+    unawaited(_desktopAuthenticator.cancel());
+    if (_ownsHostedBackendClient) {
+      _hostedBackendClient.close();
     }
     if (_ownsUpdateService) {
       _updateService.close();
@@ -499,9 +622,9 @@ class _RecorderHomeState extends State<RecorderHome>
       return;
     }
     setState(() {
-      _state = RecorderState.ready;
+      _state = _providerReady ? RecorderState.ready : RecorderState.needsConfig;
       _lastError = null;
-      _showSettings = false;
+      _showSettings = !_providerReady;
     });
     await _hideWindowAfterCapture();
   }
@@ -510,6 +633,51 @@ class _RecorderHomeState extends State<RecorderHome>
     try {
       final config = await _configRepository.load();
       final shortcutConfig = await _configRepository.loadShortcutConfig();
+      await _hostedSessionManager.initialize();
+      var setup = await _providerSetupRepository.load(manual: config);
+      var hasHostedCredentials =
+          await _hostedCredentialRepository.load() != null;
+      HostedAccount? hostedAccount;
+      List<String> hostedModels = const [];
+      String? hostedStatus;
+      if (hasHostedCredentials &&
+          setup.providerMode == TranscriptionProviderMode.hosted) {
+        try {
+          hostedAccount = await _hostedSessionManager.authorized(
+            _hostedBackendClient.account,
+          );
+          if (hostedAccount!.hostedAvailable) {
+            hostedModels = await _hostedSessionManager.authorized(
+              _hostedBackendClient.models,
+            );
+            final selected = _enabledHostedModel(
+              setup.hostedModel,
+              hostedModels,
+            );
+            if (selected != null) {
+              setup = setup.providerMode == TranscriptionProviderMode.hosted
+                  ? await _providerSetupRepository.complete(
+                      mode: TranscriptionProviderMode.hosted,
+                      hostedModel: selected,
+                      hostedAuthenticated: hasHostedCredentials,
+                      enabledHostedModels: hostedModels,
+                    )
+                  : setup.copyWith(hostedModel: selected);
+              if (setup.providerMode != TranscriptionProviderMode.hosted) {
+                await _providerSetupRepository.save(setup);
+              }
+            }
+          }
+        } on HostedApiException catch (error) {
+          if (error.requiresSignIn || error.code == 'sign_in_required') {
+            hasHostedCredentials = false;
+          }
+          hostedStatus = _hostedErrorMessage(error);
+        } catch (_) {
+          hostedStatus =
+              'Could not reach sttapp Hosted. Check your connection and retry.';
+        }
+      }
       if (!mounted) {
         return;
       }
@@ -521,25 +689,397 @@ class _RecorderHomeState extends State<RecorderHome>
         configError = error.toString();
       }
       final configIsValid = configError == null;
+      final providerIsReady = switch (setup.providerMode) {
+        TranscriptionProviderMode.manual => setup.isComplete && configIsValid,
+        TranscriptionProviderMode.hosted =>
+          setup.isComplete &&
+              hasHostedCredentials &&
+              hostedAccount?.hostedAvailable == true &&
+              hostedModels.contains(setup.hostedModel),
+        TranscriptionProviderMode.unset => false,
+      };
       setState(() {
         _config = config;
+        _providerSetup = setup;
+        _hasHostedCredentials = hasHostedCredentials;
+        _hostedAccount = hostedAccount;
+        _hostedModels = hostedModels;
+        _hostedStatus = hostedStatus;
         _shortcutConfig = shortcutConfig;
         _showSettings =
-            !configIsValid ||
+            !providerIsReady ||
             (_permissionStatusLoaded && !_permissionsAuthorized);
-        _state = configIsValid
+        _state = providerIsReady
             ? RecorderState.ready
             : RecorderState.needsConfig;
-        _lastError = configError;
+        _lastError = setup.providerMode == TranscriptionProviderMode.manual
+            ? configError
+            : null;
       });
-      if (!configIsValid ||
+      await _refreshTrayMenu();
+      if (!providerIsReady ||
           (_permissionStatusLoaded && !_permissionsAuthorized)) {
-        _refreshModelsIfPossible();
+        if (setup.providerMode == TranscriptionProviderMode.manual) {
+          _refreshModelsIfPossible();
+        }
         await _showSettingsWindow();
       }
     } catch (error) {
       _setError(error.toString());
     }
+  }
+
+  String? _enabledHostedModel(String? stored, List<String> enabled) {
+    if (stored != null) {
+      return enabled.contains(stored) ? stored : null;
+    }
+    if (enabled.contains('whisper-large-v3-turbo')) {
+      return 'whisper-large-v3-turbo';
+    }
+    return enabled.firstOrNull;
+  }
+
+  String _hostedErrorMessage(Object error) {
+    if (error is HostedApiException) {
+      if (error.requiresSignIn || error.code == 'sign_in_required') {
+        return 'Your session ended. Sign in again to continue.';
+      }
+      return error.message;
+    }
+    if (error is DesktopAuthException) {
+      return error.message;
+    }
+    return 'Could not reach sttapp Hosted. Check your connection and retry.';
+  }
+
+  Future<void> _switchProvider(TranscriptionProviderMode mode) async {
+    if (_isRecording ||
+        _isTranscribing ||
+        _isSwitchingProvider ||
+        mode == _providerSetup.providerMode) {
+      return;
+    }
+    setState(() {
+      _isSwitchingProvider = true;
+      _settingsStatus = null;
+      _hostedStatus = null;
+    });
+    try {
+      if (_isSigningIn) {
+        await _desktopAuthenticator.cancel();
+        if (!mounted) return;
+        setState(() => _isSigningIn = false);
+      }
+      if (mode == TranscriptionProviderMode.manual) {
+        final config = _config;
+        var setup = config?.isComplete == true
+            ? await _providerSetupRepository.complete(
+                mode: TranscriptionProviderMode.manual,
+                manualConfig: config,
+              )
+            : ProviderSetupState(
+                providerMode: TranscriptionProviderMode.manual,
+                draftStep: SetupDraftStep.manual,
+                hostedModel: _providerSetup.hostedModel,
+                completedVersion: null,
+              );
+        setup = setup.copyWith(hostedModel: _providerSetup.hostedModel);
+        await _providerSetupRepository.save(setup);
+        if (!mounted) return;
+        setState(() {
+          _providerSetup = setup;
+          _state = setup.isComplete
+              ? RecorderState.ready
+              : RecorderState.needsConfig;
+          _lastError = setup.isComplete ? null : 'Complete your API settings.';
+        });
+        _refreshModelsIfPossible();
+      } else {
+        var setup = ProviderSetupState(
+          providerMode: TranscriptionProviderMode.hosted,
+          draftStep: SetupDraftStep.hosted,
+          hostedModel: _providerSetup.hostedModel,
+          completedVersion: null,
+        );
+        final model = _enabledHostedModel(setup.hostedModel, _hostedModels);
+        if (_hasHostedCredentials &&
+            _hostedAccount?.hostedAvailable == true &&
+            model != null) {
+          setup = await _providerSetupRepository.complete(
+            mode: TranscriptionProviderMode.hosted,
+            hostedModel: model,
+            hostedAuthenticated: _hasHostedCredentials,
+            enabledHostedModels: _hostedModels,
+          );
+        } else {
+          await _providerSetupRepository.save(setup);
+        }
+        if (!mounted) return;
+        setState(() {
+          _providerSetup = setup;
+          _state = setup.isComplete
+              ? RecorderState.ready
+              : RecorderState.needsConfig;
+          _lastError = null;
+        });
+        if (_hasHostedCredentials) {
+          await _refreshHosted();
+        }
+      }
+      await _refreshTrayMenu();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _lastError = 'Could not switch transcription providers: $error';
+      });
+    } finally {
+      if (mounted) setState(() => _isSwitchingProvider = false);
+    }
+  }
+
+  Future<void> _signInHosted() async {
+    if (_isSigningIn) return;
+    setState(() {
+      _isSigningIn = true;
+      _hostedStatus = 'Waiting for sign-in in your browser…';
+      _lastError = null;
+    });
+    try {
+      final credentials = await _desktopAuthenticator.signIn(
+        deviceLabel: 'sttapp desktop',
+      );
+      await _hostedSessionManager.accept(credentials);
+      if (!mounted) return;
+      setState(() => _hasHostedCredentials = true);
+      await _refreshHosted();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _hostedStatus = _hostedErrorMessage(error);
+        if (_providerSetup.providerMode == TranscriptionProviderMode.hosted) {
+          _state = _providerReady
+              ? RecorderState.ready
+              : RecorderState.needsConfig;
+        }
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isSigningIn = false);
+        await _refreshTrayMenu();
+      }
+    }
+  }
+
+  Future<void> _cancelHostedSignIn() async {
+    if (!_isSigningIn) return;
+    await _desktopAuthenticator.cancel();
+    if (!mounted) return;
+    setState(() {
+      _isSigningIn = false;
+      _hostedStatus = 'Sign-in canceled. You can try again when ready.';
+    });
+  }
+
+  Future<void> _refreshHosted() async {
+    if (_isLoadingHosted || !_hasHostedCredentials) return;
+    setState(() {
+      _isLoadingHosted = true;
+      _hostedStatus = 'Refreshing account status…';
+    });
+    try {
+      final account = await _hostedSessionManager.authorized(
+        _hostedBackendClient.account,
+      );
+      final models = account.hostedAvailable
+          ? await _hostedSessionManager.authorized(_hostedBackendClient.models)
+          : <String>[];
+      var setup = _providerSetup;
+      final selected = _enabledHostedModel(setup.hostedModel, models);
+      if (setup.providerMode == TranscriptionProviderMode.hosted &&
+          selected != null) {
+        setup = await _providerSetupRepository.complete(
+          mode: TranscriptionProviderMode.hosted,
+          hostedModel: selected,
+          hostedAuthenticated: _hasHostedCredentials,
+          enabledHostedModels: models,
+        );
+      } else if (selected != null && setup.hostedModel != selected) {
+        setup = setup.copyWith(hostedModel: selected);
+        await _providerSetupRepository.save(setup);
+      } else if (setup.providerMode == TranscriptionProviderMode.hosted &&
+          setup.isComplete) {
+        setup = setup.copyWith(
+          clearCompletedVersion: true,
+          draftStep: SetupDraftStep.hosted,
+        );
+        await _providerSetupRepository.save(setup);
+      }
+      if (!mounted) return;
+      setState(() {
+        _hostedAccount = account;
+        _hostedModels = models;
+        _providerSetup = setup;
+        _hostedStatus = account.hostedAvailable
+            ? models.isEmpty
+                  ? 'No hosted transcription models are currently available.'
+                  : 'sttapp Hosted is ready.'
+            : null;
+        _state = _providerReady
+            ? RecorderState.ready
+            : RecorderState.needsConfig;
+        _lastError = null;
+      });
+      await _refreshTrayMenu();
+    } catch (error) {
+      final requiresSignIn =
+          error is HostedApiException &&
+          (error.requiresSignIn || error.code == 'sign_in_required');
+      if (!mounted) return;
+      setState(() {
+        if (requiresSignIn) {
+          _hasHostedCredentials = false;
+          _hostedAccount = null;
+          _hostedModels = const [];
+        }
+        _hostedStatus = _hostedErrorMessage(error);
+        if (_providerSetup.providerMode == TranscriptionProviderMode.hosted) {
+          _state = _providerReady
+              ? RecorderState.ready
+              : RecorderState.needsConfig;
+        }
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingHosted = false);
+        await _refreshTrayMenu();
+      }
+    }
+  }
+
+  Future<void> _selectHostedModel(String model) async {
+    if (!_hostedModels.contains(model)) return;
+    final setup = await _providerSetupRepository.complete(
+      mode: TranscriptionProviderMode.hosted,
+      hostedModel: model,
+      hostedAuthenticated: _hasHostedCredentials,
+      enabledHostedModels: _hostedModels,
+    );
+    if (!mounted) return;
+    setState(() {
+      _providerSetup = setup;
+      _state = RecorderState.ready;
+      _hostedStatus = 'sttapp Hosted is ready.';
+      _lastError = null;
+    });
+    await _refreshTrayMenu();
+  }
+
+  Future<void> _signOutHosted() async {
+    if (_isLoadingHosted || _isSigningIn) return;
+    setState(() {
+      _isLoadingHosted = true;
+      _hostedStatus = 'Signing out…';
+    });
+    Object? persistenceError;
+    try {
+      await _hostedSessionManager.signOut();
+    } catch (_) {
+      // Local credentials are cleared by HostedSessionManager even if logout
+      // cannot reach the backend.
+    }
+    final setup =
+        _providerSetup.providerMode == TranscriptionProviderMode.hosted
+        ? _providerSetup.copyWith(
+            clearCompletedVersion: true,
+            draftStep: SetupDraftStep.hosted,
+          )
+        : _providerSetup;
+    try {
+      await _providerSetupRepository.save(setup);
+    } catch (error) {
+      persistenceError = error;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _providerSetup = setup;
+          _hasHostedCredentials = false;
+          _hostedAccount = null;
+          _hostedModels = const [];
+          _isLoadingHosted = false;
+          _hostedStatus = persistenceError == null
+              ? 'Signed out of sttapp Hosted.'
+              : 'Signed out, but local setup state could not be saved.';
+          if (setup.providerMode == TranscriptionProviderMode.hosted) {
+            _state = RecorderState.needsConfig;
+          }
+        });
+        await _refreshTrayMenu();
+      }
+    }
+  }
+
+  Future<void> _openHostedBilling({required bool portal}) async {
+    if (_isOpeningBilling) return;
+    setState(() {
+      _isOpeningBilling = true;
+      _hostedStatus = portal
+          ? 'Opening billing settings…'
+          : 'Opening secure checkout…';
+    });
+    try {
+      final uri = await _hostedSessionManager.authorized(
+        portal ? _hostedBackendClient.portal : _hostedBackendClient.checkout,
+      );
+      final opened = await _releaseLauncher(uri);
+      if (!opened) throw const DesktopAuthException('Browser could not open.');
+      if (!mounted) return;
+      setState(() {
+        _hostedStatus = portal
+            ? 'Billing settings opened in your browser.'
+            : 'Checkout opened. After payment, return here and refresh status.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final requiresSignIn =
+          error is HostedApiException &&
+          (error.requiresSignIn || error.code == 'sign_in_required');
+      if (requiresSignIn) {
+        await _markHostedSignInRequired();
+      } else if (mounted) {
+        setState(() => _hostedStatus = _hostedErrorMessage(error));
+      }
+    } finally {
+      if (mounted) setState(() => _isOpeningBilling = false);
+    }
+  }
+
+  Future<void> _markHostedSignInRequired() async {
+    final setup =
+        _providerSetup.providerMode == TranscriptionProviderMode.hosted
+        ? _providerSetup.copyWith(
+            clearCompletedVersion: true,
+            draftStep: SetupDraftStep.hosted,
+          )
+        : _providerSetup;
+    try {
+      await _providerSetupRepository.save(setup);
+    } catch (_) {
+      // The in-memory state still fails closed; the session repository has
+      // already removed permanently invalid credentials.
+    }
+    if (!mounted) return;
+    setState(() {
+      _providerSetup = setup;
+      _hasHostedCredentials = false;
+      _hostedAccount = null;
+      _hostedModels = const [];
+      _hostedStatus = 'Your session ended. Sign in again to continue.';
+      if (setup.providerMode == TranscriptionProviderMode.hosted) {
+        _state = RecorderState.needsConfig;
+        _showSettings = true;
+      }
+    });
+    await _refreshTrayMenu();
   }
 
   Future<void> _checkForUpdates() async {
@@ -656,7 +1196,7 @@ class _RecorderHomeState extends State<RecorderHome>
         MenuItem(
           key: 'start_capture',
           label: _isRecording ? 'Recording' : 'Start capture',
-          disabled: !_permissionsAuthorized || _isRecording,
+          disabled: !_permissionsAuthorized || !_providerReady || _isRecording,
         ),
         MenuItem(
           key: 'stop_capture',
@@ -689,11 +1229,20 @@ class _RecorderHomeState extends State<RecorderHome>
     }
 
     final config = _config;
-    if (config == null || !config.isComplete) {
+    if (!_providerReady || config == null) {
       setState(() {
         _state = RecorderState.needsConfig;
         _showSettings = true;
-        _lastError = 'OpenAI API key is required.';
+        _lastError = switch (_providerSetup.providerMode) {
+          TranscriptionProviderMode.hosted when !_hasHostedCredentials =>
+            'Sign in to sttapp Hosted before recording.',
+          TranscriptionProviderMode.hosted =>
+            'Finish sttapp Hosted setup before recording.',
+          TranscriptionProviderMode.manual =>
+            'Complete your API settings before recording.',
+          TranscriptionProviderMode.unset =>
+            'Choose a transcription provider before recording.',
+        };
       });
       await _showSettingsWindow();
       return;
@@ -749,7 +1298,11 @@ class _RecorderHomeState extends State<RecorderHome>
     AudioClip? clip;
     try {
       clip = await recording.stop();
-      final transcript = await _transcriptionService.transcribe(clip, config);
+      final transcript = await _transcriptionCoordinator.transcribe(
+        clip: clip,
+        setup: _providerSetup,
+        manualConfig: config,
+      );
       if (!mounted) {
         return;
       }
@@ -787,7 +1340,18 @@ class _RecorderHomeState extends State<RecorderHome>
         _lastTranscript = transcript;
       });
     } catch (error) {
-      _setError(error.toString());
+      if (error is HostedApiException &&
+          (error.requiresSignIn || error.code == 'sign_in_required')) {
+        await _markHostedSignInRequired();
+        if (mounted) {
+          await _showSettingsWindow();
+        }
+      }
+      _setError(
+        _providerSetup.providerMode == TranscriptionProviderMode.hosted
+            ? _hostedErrorMessage(error)
+            : error.toString(),
+      );
     } finally {
       clip?.dispose();
       await _refreshTrayMenu();
@@ -817,25 +1381,29 @@ class _RecorderHomeState extends State<RecorderHome>
     try {
       config.validate();
       await _configRepository.save(config);
+      var providerSetup = await _providerSetupRepository.complete(
+        mode: TranscriptionProviderMode.manual,
+        manualConfig: config,
+      );
+      providerSetup = providerSetup.copyWith(
+        hostedModel: _providerSetup.hostedModel,
+      );
+      await _providerSetupRepository.save(providerSetup);
       if (_supportsShortcutSettings) {
         await _configRepository.saveShortcutConfig(_shortcutConfig);
-        if (_initializePlatformServices && _permissionsAuthorized) {
-          _inputServicesInitialized = false;
-          await _registerHotkeys();
-          _inputServicesInitialized = true;
-          await _refreshTrayMenu();
-        }
       }
       if (!mounted) {
         return;
       }
       setState(() {
         _config = config;
+        _providerSetup = providerSetup;
         _state = RecorderState.ready;
         _showSettings = !_permissionsAuthorized;
         _lastError = null;
         _settingsStatus = null;
       });
+      await _refreshTrayMenu();
       if (_permissionsAuthorized) {
         await _hideWindowAfterCapture();
       } else {
@@ -881,7 +1449,8 @@ class _RecorderHomeState extends State<RecorderHome>
   Future<void> _hideWindowAfterCapture() async {
     if (!_initializePlatformServices ||
         _showSettings ||
-        !_permissionsAuthorized) {
+        !_permissionsAuthorized ||
+        !_providerReady) {
       return;
     }
 
@@ -1003,6 +1572,26 @@ class _RecorderHomeState extends State<RecorderHome>
       _shortcutConfig = ShortcutConfig(keyId: keyId);
       _settingsStatus = null;
     });
+    unawaited(_persistShortcutSettings());
+  }
+
+  Future<void> _persistShortcutSettings() async {
+    try {
+      await _configRepository.saveShortcutConfig(_shortcutConfig);
+      if (_initializePlatformServices && _permissionsAuthorized) {
+        _inputServicesInitialized = false;
+        await _registerHotkeys();
+        _inputServicesInitialized = true;
+        await _refreshTrayMenu();
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _lastError = error is HotkeyRegistrationException
+            ? _shortcutFailureMessage(error)
+            : 'Could not save the shortcut: $error';
+      });
+    }
   }
 
   void _resetShortcut() {
@@ -1026,10 +1615,16 @@ class _RecorderHomeState extends State<RecorderHome>
       _settingsStatus = null;
       if (_state != RecorderState.recording &&
           _state != RecorderState.transcribing) {
-        _state = RecorderState.needsConfig;
+        _state = _providerReady
+            ? RecorderState.ready
+            : RecorderState.needsConfig;
       }
     });
-    _refreshModelsIfPossible();
+    if (_providerSetup.providerMode == TranscriptionProviderMode.hosted) {
+      if (_hasHostedCredentials) unawaited(_refreshHosted());
+    } else {
+      _refreshModelsIfPossible();
+    }
     unawaited(_showSettingsWindow());
   }
 
@@ -1196,10 +1791,11 @@ class _RecorderHomeState extends State<RecorderHome>
     if (_isQuitting) {
       return;
     }
-    if (!_permissionsAuthorized) {
+    if (!_permissionsAuthorized || !_providerReady) {
       unawaited(_showSettingsWindow());
       return;
     }
+    if (mounted) setState(() => _showSettings = false);
     windowManager.hide();
     unawaited(windowManager.setSkipTaskbar(true));
   }
@@ -1221,6 +1817,9 @@ class _RecorderHomeState extends State<RecorderHome>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final settingsPadding = MediaQuery.sizeOf(context).width <= 460
+        ? 16.0
+        : 24.0;
 
     return Scaffold(
       backgroundColor: _showSettings ? null : Colors.transparent,
@@ -1231,7 +1830,7 @@ class _RecorderHomeState extends State<RecorderHome>
                 IconButton(
                   tooltip: 'Close',
                   onPressed:
-                      _config?.isComplete == true &&
+                      _providerReady &&
                           _permissionsAuthorized &&
                           _shortcutRegistrationState !=
                               ShortcutRegistrationState.failed
@@ -1246,7 +1845,7 @@ class _RecorderHomeState extends State<RecorderHome>
             )
           : null,
       body: Padding(
-        padding: EdgeInsets.all(_showSettings ? 24 : 0),
+        padding: EdgeInsets.all(_showSettings ? settingsPadding : 0),
         child: _showSettings
             ? _buildSettings(context)
             : _buildRecorder(context),
@@ -1255,7 +1854,12 @@ class _RecorderHomeState extends State<RecorderHome>
           ? null
           : SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                padding: EdgeInsets.fromLTRB(
+                  settingsPadding,
+                  0,
+                  settingsPadding,
+                  16,
+                ),
                 child: Text(
                   _lastError!,
                   style: TextStyle(color: colorScheme.error),
@@ -1336,9 +1940,6 @@ class _RecorderHomeState extends State<RecorderHome>
 
   Widget _buildSettings(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final modelDropdownValue = _availableModels.contains(_selectedModelValue)
-        ? _selectedModelValue
-        : _customModelValue;
     final updateStatusText = switch (_updateStatus) {
       UpdateStatus.development => 'Development build',
       UpdateStatus.checking => 'Checking for updates…',
@@ -1354,36 +1955,7 @@ class _RecorderHomeState extends State<RecorderHome>
 
     return ListView(
       children: [
-        Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(
-                text:
-                    'Audio API v${SttappAudio.nativeApiVersion} · '
-                    'Input API v${DesktopInput.nativeApiVersion} · ',
-              ),
-              TextSpan(
-                text: updateStatusText,
-                style: TextStyle(color: updateStatusColor),
-              ),
-            ],
-          ),
-        ),
-        if (_availableUpdate != null) ...[
-          const SizedBox(height: 12),
-          _buildUpdateCard(context, _availableUpdate!),
-        ],
-        if (_shortcutRegistrationState == ShortcutRegistrationState.checking ||
-            _shortcutRegistrationState == ShortcutRegistrationState.failed) ...[
-          const SizedBox(height: 12),
-          ShortcutRegistrationNotice(
-            checking:
-                _shortcutRegistrationState ==
-                ShortcutRegistrationState.checking,
-            message: _shortcutRegistrationError,
-            onRetry: () => unawaited(_retryShortcutRegistration()),
-          ),
-        ],
+        _buildProviderSection(context),
         if (_requiresDesktopPermissions) ...[
           const SizedBox(height: 20),
           Text(
@@ -1413,7 +1985,323 @@ class _RecorderHomeState extends State<RecorderHome>
             Text(_permissionError!, style: TextStyle(color: colorScheme.error)),
           ],
         ],
-        const SizedBox(height: 20),
+        if (_shortcutRegistrationState == ShortcutRegistrationState.checking ||
+            _shortcutRegistrationState == ShortcutRegistrationState.failed) ...[
+          const SizedBox(height: 20),
+          ShortcutRegistrationNotice(
+            checking:
+                _shortcutRegistrationState ==
+                ShortcutRegistrationState.checking,
+            message: _shortcutRegistrationError,
+            onRetry: () => unawaited(_retryShortcutRegistration()),
+          ),
+        ],
+        if (_supportsShortcutSettings) ...[
+          const SizedBox(height: 20),
+          Text(
+            'Keyboard shortcut',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            key: ValueKey('shortcut-${_shortcutConfig.keyId}'),
+            initialValue: _shortcutConfig.keyId,
+            items: [
+              for (final option in shortcutKeyOptions)
+                DropdownMenuItem(value: option.id, child: Text(option.label)),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                _selectShortcut(value);
+              }
+            },
+            decoration: const InputDecoration(
+              labelText: 'Shortcut key',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Normal: ${_shortcutConfig.normalLabel} · Plain: ${_shortcutConfig.plainLabel}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(onPressed: _resetShortcut, child: const Text('Reset')),
+            ],
+          ),
+        ],
+        const SizedBox(height: 24),
+        const Divider(),
+        const SizedBox(height: 16),
+        Text(
+          'Updates and version',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text:
+                    'Audio API v${SttappAudio.nativeApiVersion} · '
+                    'Input API v${DesktopInput.nativeApiVersion} · ',
+              ),
+              TextSpan(
+                text: updateStatusText,
+                style: TextStyle(color: updateStatusColor),
+              ),
+            ],
+          ),
+        ),
+        if (_availableUpdate != null) ...[
+          const SizedBox(height: 12),
+          _buildUpdateCard(context, _availableUpdate!),
+        ],
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  Widget _buildProviderSection(BuildContext context) {
+    final hosted =
+        _providerSetup.providerMode == TranscriptionProviderMode.hosted;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Transcription provider',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          hosted
+              ? 'Audio is sent only to sttapp Hosted.'
+              : 'Audio is sent only to your configured API endpoint.',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: hosted
+                ? _buildHostedProvider(context)
+                : _buildManualProvider(context),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHostedProvider(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final account = _hostedAccount;
+    final selectedModel = _hostedModels.contains(_providerSetup.hostedModel)
+        ? _providerSetup.hostedModel
+        : null;
+    final subscriptionLabel = switch (account?.subscriptionState) {
+      'active' => 'Active subscription',
+      'trialing' => 'Trial active',
+      'on_hold' || 'past_due' => 'Payment action required',
+      'canceled' || 'expired' => 'Subscription ended',
+      null => 'Signed out',
+      _ => 'Subscription required',
+    };
+    final statusIsError =
+        _hostedStatus != null &&
+        !(_hostedStatus!.contains('ready') ||
+            _hostedStatus!.contains('opened') ||
+            _hostedStatus!.contains('Refreshing') ||
+            _hostedStatus!.contains('Waiting'));
+    final paymentActionRequired =
+        account?.subscriptionState == 'on_hold' ||
+        account?.subscriptionState == 'past_due';
+    final subscriptionEnded =
+        account?.subscriptionState == 'canceled' ||
+        account?.subscriptionState == 'expired';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.cloud_outlined, color: colors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'sttapp Hosted',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _hasHostedCredentials
+                        ? subscriptionLabel
+                        : 'Sign in once, then use sttapp normally.',
+                    style: TextStyle(color: colors.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (_isSigningIn) ...[
+          const SizedBox(height: 16),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 10),
+          const Text('Complete sign-in in your system browser.'),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: _cancelHostedSignIn,
+            child: const Text('Cancel sign-in'),
+          ),
+        ] else if (!_hasHostedCredentials) ...[
+          const SizedBox(height: 16),
+          const Text(
+            'Authentication happens securely in your browser. No hosted token '
+            'or backend configuration is shown in the app.',
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: _signInHosted,
+            icon: const Icon(Icons.open_in_browser),
+            label: const Text('Sign in securely'),
+          ),
+        ] else ...[
+          if (_isLoadingHosted) ...[
+            const SizedBox(height: 14),
+            const LinearProgressIndicator(),
+          ],
+          if (account?.hostedAvailable == true && _hostedModels.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              key: ValueKey('hosted-model-$selectedModel'),
+              initialValue: selectedModel,
+              items: [
+                for (final model in _hostedModels)
+                  DropdownMenuItem(value: model, child: Text(model)),
+              ],
+              onChanged: _isLoadingHosted
+                  ? null
+                  : (value) {
+                      if (value != null) unawaited(_selectHostedModel(value));
+                    },
+              decoration: const InputDecoration(
+                labelText: 'Hosted model',
+                hintText: 'Choose a hosted model',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Estimated hosted usage: '
+              '\$${(account!.usageMicros / 1000000).toStringAsFixed(2)} '
+              '(as of ${account.usageAsOf.toIso8601String().substring(0, 10)} UTC).',
+              style: TextStyle(color: colors.onSurfaceVariant),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (account?.checkoutAvailable == true && !paymentActionRequired)
+                FilledButton(
+                  onPressed: _isOpeningBilling
+                      ? null
+                      : () => _openHostedBilling(portal: false),
+                  child: Text(subscriptionEnded ? 'Resubscribe' : 'Subscribe'),
+                ),
+              if (account?.portalAvailable == true && paymentActionRequired)
+                FilledButton(
+                  onPressed: _isOpeningBilling
+                      ? null
+                      : () => _openHostedBilling(portal: true),
+                  child: const Text('Update payment method'),
+                ),
+              if (account?.portalAvailable == true && !paymentActionRequired)
+                OutlinedButton(
+                  onPressed: _isOpeningBilling
+                      ? null
+                      : () => _openHostedBilling(portal: true),
+                  child: const Text('Manage billing'),
+                ),
+              OutlinedButton(
+                onPressed: _isLoadingHosted ? null : _refreshHosted,
+                child: const Text('Refresh status'),
+              ),
+              TextButton(
+                onPressed: _isLoadingHosted ? null : _signOutHosted,
+                child: const Text('Sign out'),
+              ),
+            ],
+          ),
+        ],
+        if (_hostedStatus != null) ...[
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _hostedStatus!,
+              style: TextStyle(
+                color: statusIsError ? colors.error : colors.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: _isRecording || _isTranscribing || _isSwitchingProvider
+              ? null
+              : () => _switchProvider(TranscriptionProviderMode.manual),
+          icon: const Icon(Icons.key_outlined),
+          label: const Text('Use API key instead'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildManualProvider(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final modelDropdownValue = _availableModels.contains(_selectedModelValue)
+        ? _selectedModelValue
+        : _customModelValue;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.key_outlined, color: colors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'API key',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Use your own OpenAI-compatible provider.',
+                    style: TextStyle(color: colors.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
         TextField(
           controller: _apiKeyController,
           obscureText: !_showApiKey,
@@ -1450,9 +2338,7 @@ class _RecorderHomeState extends State<RecorderHome>
             ),
           ],
           onChanged: (value) {
-            if (value != null) {
-              _selectModel(value);
-            }
+            if (value != null) _selectModel(value);
           },
           decoration: const InputDecoration(
             labelText: 'Model',
@@ -1470,76 +2356,51 @@ class _RecorderHomeState extends State<RecorderHome>
             onChanged: (_) => setState(() => _settingsStatus = null),
           ),
         ],
-        if (_supportsShortcutSettings) ...[
-          const SizedBox(height: 20),
-          DropdownButtonFormField<String>(
-            key: ValueKey('shortcut-${_shortcutConfig.keyId}'),
-            initialValue: _shortcutConfig.keyId,
-            items: [
-              for (final option in shortcutKeyOptions)
-                DropdownMenuItem(value: option.id, child: Text(option.label)),
-            ],
-            onChanged: (value) {
-              if (value != null) {
-                _selectShortcut(value);
-              }
-            },
-            decoration: const InputDecoration(
-              labelText: 'Shortcut key',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Normal: ${_shortcutConfig.normalLabel} · Plain: ${_shortcutConfig.plainLabel}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton(onPressed: _resetShortcut, child: const Text('Reset')),
-            ],
-          ),
-        ],
         if (_settingsStatus != null) ...[
-          const SizedBox(height: 16),
-          Text(
-            _settingsStatus!,
-            style: TextStyle(
-              color: _settingsStatus!.startsWith('Connection successful')
-                  ? colorScheme.primary
-                  : colorScheme.error,
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _settingsStatus!,
+              style: TextStyle(
+                color: _settingsStatus!.startsWith('Connection successful')
+                    ? colors.primary
+                    : colors.error,
+              ),
             ),
           ),
         ],
         if (_isLoadingModels) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           const LinearProgressIndicator(),
         ],
-        const SizedBox(height: 20),
-        Row(
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _isTestingConnection ? null : _testConnection,
-                child: _isTestingConnection
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Test Connection'),
-              ),
+            FilledButton(
+              onPressed: _saveSettings,
+              child: const Text('Save API settings'),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                onPressed: _saveSettings,
-                child: const Text('Save'),
-              ),
+            OutlinedButton(
+              onPressed: _isTestingConnection ? null : _testConnection,
+              child: _isTestingConnection
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Test connection'),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: _isRecording || _isTranscribing || _isSwitchingProvider
+              ? null
+              : () => _switchProvider(TranscriptionProviderMode.hosted),
+          icon: const Icon(Icons.cloud_outlined),
+          label: const Text('Use sttapp Hosted instead'),
         ),
       ],
     );

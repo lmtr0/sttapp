@@ -1,6 +1,6 @@
 # Hosted backend implementation status
 
-Updated: 2026-07-16
+Updated: 2026-07-18
 
 This file distinguishes repository-local implementation from provider, legal,
 infrastructure, and cross-platform evidence. It intentionally does not mark the
@@ -26,10 +26,16 @@ proof.
 - Raw-byte webhook verification/inbox, outbox delivery with retry/backoff/dead
   letter state, webhook state normalization, retention cleanup and worker
   leases.
-- Flutter provider/setup persistence migration, one-item atomic hosted
-  credentials, hosted HTTP client/error parsing, serialized refresh, PKCE
-  loopback service, and a no-fallback transcription coordinator. Existing manual
-  storage and service remain unchanged.
+- Flutter provider/setup persistence migration, one-item atomic manual config,
+  provider state, and hosted credentials; hosted HTTP client/error parsing,
+  serialized refresh; PKCE loopback service, and a no-fallback transcription
+  coordinator. The desktop Settings UI now defaults fresh installs to sttapp
+  Hosted, preserves valid legacy manual setups, supports reversible
+  hosted/manual switching without clearing inactive credentials, and exposes
+  sign-in, cancellation, account, enabled-model, checkout, portal, refresh, and
+  sign-out states. Recorder readiness, window closing, tray start state, and
+  transcription routing now follow the active provider. Existing manual storage
+  and service remain compatible.
 
 ## Partially implemented; acceptance evidence still required
 
@@ -45,9 +51,14 @@ proof.
 - Groq successful transcription and Dodo ingestion require capped sandbox keys;
   request code is local, but end-to-end exactly-once/reconciliation evidence is
   external.
-- Flutter hosted persistence, HTTP parsing, and refresh serialization are unit
-  tested. The loopback service still needs focused tests, and the full reviewed
-  state-driven setup/settings UI and signed three-platform manual tests remain.
+- Flutter hosted persistence, HTTP parsing, refresh serialization, fresh/legacy
+  provider selection, PKCE loopback exchange/cancel/overlap handling, sign-in UI
+  states, enabled-model selection, reversible switching/restart, sign-out
+  preservation, active-provider readiness, and no-fallback coordinator routing
+  are unit/widget tested. The loopback service still needs focused OS-level
+  tests, and signed Linux/macOS/Windows browser callback, billing-return,
+  secure-storage, recording, and transcription journeys remain external release
+  evidence.
 - Safe structured logs exist, but no complete metrics/tracing backend,
   dashboards, budgets, or test-fired alert routes exist. Distributed request
   rate limiting and global/provider spend circuit breakers also remain.

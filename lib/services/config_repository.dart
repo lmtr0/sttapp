@@ -166,6 +166,7 @@ final class ConfigRepository {
   static const _apiKeyKey = 'openai_api_key';
   static const _baseUrlKey = 'openai_base_url';
   static const _modelKey = 'openai_model';
+  static const _configKey = 'manual_transcription_config_v1';
   static const _shortcutKeyIdKey = 'shortcut_key_id';
 
   final ConfigStore _store;
@@ -176,6 +177,11 @@ final class ConfigRepository {
 
   Future<TranscriptionConfig> load() async {
     await migrateLegacyTauriConfigIfNeeded();
+
+    final atomicConfig = await _loadAtomicConfig();
+    if (atomicConfig != null) {
+      return atomicConfig;
+    }
 
     final storedApiKey = await _store.read(_apiKeyKey);
     final storedBaseUrl = await _store.read(_baseUrlKey);
@@ -197,9 +203,28 @@ final class ConfigRepository {
   }
 
   Future<void> save(TranscriptionConfig config) async {
-    await _store.write(_apiKeyKey, config.apiKey);
-    await _store.write(_baseUrlKey, config.baseUrl);
-    await _store.write(_modelKey, config.model);
+    await _store.write(
+      _configKey,
+      jsonEncode({
+        'api_key': config.apiKey,
+        'base_url': config.baseUrl,
+        'model': config.model,
+      }),
+    );
+    // Keep the pre-v1 keys synchronized for downgrade compatibility. The
+    // single item above is authoritative, so a failed compatibility write
+    // cannot leave a partially updated configuration active.
+    for (final entry in {
+      _apiKeyKey: config.apiKey,
+      _baseUrlKey: config.baseUrl,
+      _modelKey: config.model,
+    }.entries) {
+      try {
+        await _store.write(entry.key, entry.value);
+      } catch (_) {
+        // The atomic record has already been saved successfully.
+      }
+    }
   }
 
   Future<ShortcutConfig> loadShortcutConfig() async {
@@ -229,6 +254,9 @@ final class ConfigRepository {
   }
 
   Future<bool> _flutterConfigIsEmpty() async {
+    if (await _loadAtomicConfig() != null) {
+      return false;
+    }
     final storedApiKey = await _store.read(_apiKeyKey);
     final storedBaseUrl = await _store.read(_baseUrlKey);
     final storedModel = await _store.read(_modelKey);
@@ -308,6 +336,28 @@ final class ConfigRepository {
   static String _legacyString(Object? value) {
     return value is String ? value.trim() : '';
   }
+
+  Future<TranscriptionConfig?> _loadAtomicConfig() async {
+    final encoded = (await _store.read(_configKey))?.trim() ?? '';
+    if (encoded.isEmpty) return null;
+    try {
+      final value = jsonDecode(encoded);
+      if (value is! Map<String, dynamic>) return null;
+      final apiKey = value['api_key'];
+      final baseUrl = value['base_url'];
+      final model = value['model'];
+      if (apiKey is! String || baseUrl is! String || model is! String) {
+        return null;
+      }
+      return TranscriptionConfig(
+        apiKey: apiKey,
+        baseUrl: baseUrl,
+        model: model,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 enum TranscriptionProviderMode { unset, hosted, manual }
@@ -339,11 +389,14 @@ final class ProviderSetupState {
     SetupDraftStep? draftStep,
     String? hostedModel,
     int? completedVersion,
+    bool clearCompletedVersion = false,
   }) => ProviderSetupState(
     providerMode: providerMode ?? this.providerMode,
     draftStep: draftStep ?? this.draftStep,
     hostedModel: hostedModel ?? this.hostedModel,
-    completedVersion: completedVersion ?? this.completedVersion,
+    completedVersion: clearCompletedVersion
+        ? null
+        : completedVersion ?? this.completedVersion,
   );
 }
 
@@ -354,13 +407,16 @@ final class ProviderSetupRepository {
   static const _draftStepKey = 'setup_draft_step';
   static const _completedVersionKey = 'setup_version_completed';
   static const _hostedModelKey = 'hosted_model';
+  static const _stateKey = 'provider_setup_state_v1';
   final ConfigStore _store;
 
   Future<ProviderSetupState> load({required TranscriptionConfig manual}) async {
-    final mode = _parseMode(await _store.read(_modeKey));
-    final version = int.tryParse(
-      (await _store.read(_completedVersionKey)) ?? '',
-    );
+    final atomicState = await _loadAtomicState();
+    final mode =
+        atomicState?.providerMode ?? _parseMode(await _store.read(_modeKey));
+    final version =
+        atomicState?.completedVersion ??
+        int.tryParse((await _store.read(_completedVersionKey)) ?? '');
     if (mode == TranscriptionProviderMode.unset && manual.isComplete) {
       final migrated = const ProviderSetupState(
         providerMode: TranscriptionProviderMode.manual,
@@ -371,6 +427,17 @@ final class ProviderSetupRepository {
       await save(migrated);
       return migrated;
     }
+    if (mode == TranscriptionProviderMode.unset) {
+      final fresh = const ProviderSetupState(
+        providerMode: TranscriptionProviderMode.hosted,
+        draftStep: SetupDraftStep.hosted,
+        hostedModel: null,
+        completedVersion: null,
+      );
+      await save(fresh);
+      return fresh;
+    }
+    if (atomicState != null) return atomicState;
     return ProviderSetupState(
       providerMode: mode,
       draftStep: _parseStep(await _store.read(_draftStepKey)),
@@ -380,18 +447,36 @@ final class ProviderSetupRepository {
   }
 
   Future<void> save(ProviderSetupState state) async {
-    await _store.write(_modeKey, state.providerMode.name);
-    await _store.write(_draftStepKey, state.draftStep.name);
-    await _store.write(_hostedModelKey, state.hostedModel ?? '');
     await _store.write(
-      _completedVersionKey,
-      state.completedVersion?.toString() ?? '',
+      _stateKey,
+      jsonEncode({
+        'provider_mode': state.providerMode.name,
+        'draft_step': state.draftStep.name,
+        'hosted_model': state.hostedModel,
+        'completed_version': state.completedVersion,
+      }),
     );
+    // Mirror the previous format for downgrade compatibility. The JSON record
+    // is authoritative after the first successful write.
+    for (final entry in {
+      _modeKey: state.providerMode.name,
+      _draftStepKey: state.draftStep.name,
+      _hostedModelKey: state.hostedModel ?? '',
+      _completedVersionKey: state.completedVersion?.toString() ?? '',
+    }.entries) {
+      try {
+        await _store.write(entry.key, entry.value);
+      } catch (_) {
+        // The atomic record has already been saved successfully.
+      }
+    }
   }
 
   Future<ProviderSetupState> complete({
     required TranscriptionProviderMode mode,
     String? hostedModel,
+    bool hostedAuthenticated = false,
+    Iterable<String> enabledHostedModels = const [],
     TranscriptionConfig? manualConfig,
   }) async {
     if (mode == TranscriptionProviderMode.unset) {
@@ -400,6 +485,13 @@ final class ProviderSetupRepository {
     if (mode == TranscriptionProviderMode.hosted &&
         (hostedModel == null || hostedModel.trim().isEmpty)) {
       throw const ConfigException('A hosted model is required.');
+    }
+    if (mode == TranscriptionProviderMode.hosted && !hostedAuthenticated) {
+      throw const ConfigException('Hosted sign-in is required.');
+    }
+    if (mode == TranscriptionProviderMode.hosted &&
+        !enabledHostedModels.contains(hostedModel!.trim())) {
+      throw const ConfigException('The hosted model is not enabled.');
     }
     if (mode == TranscriptionProviderMode.manual) {
       if (manualConfig == null) {
@@ -432,6 +524,43 @@ final class ProviderSetupRepository {
   static String? _nonEmpty(String? value) {
     final normalized = value?.trim();
     return normalized == null || normalized.isEmpty ? null : normalized;
+  }
+
+  Future<ProviderSetupState?> _loadAtomicState() async {
+    final encoded = (await _store.read(_stateKey))?.trim() ?? '';
+    if (encoded.isEmpty) return null;
+    try {
+      final value = jsonDecode(encoded);
+      if (value is! Map<String, dynamic>) return null;
+      final rawMode = value['provider_mode'];
+      final rawStep = value['draft_step'];
+      final rawModel = value['hosted_model'];
+      final rawVersion = value['completed_version'];
+      if (rawMode is! String ||
+          rawStep is! String ||
+          (rawModel != null && rawModel is! String) ||
+          (rawVersion != null && rawVersion is! int)) {
+        return null;
+      }
+      final mode = _parseMode(rawMode);
+      if (mode == TranscriptionProviderMode.unset &&
+          rawMode != TranscriptionProviderMode.unset.name) {
+        return null;
+      }
+      final step = _parseStep(rawStep);
+      if (step == SetupDraftStep.choose &&
+          rawStep != SetupDraftStep.choose.name) {
+        return null;
+      }
+      return ProviderSetupState(
+        providerMode: mode,
+        draftStep: step,
+        hostedModel: _nonEmpty(rawModel as String?),
+        completedVersion: rawVersion as int?,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
 

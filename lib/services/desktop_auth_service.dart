@@ -9,6 +9,12 @@ import 'package:sttapp/services/hosted_backend_client.dart';
 
 typedef BrowserLauncher = Future<bool> Function(Uri uri);
 
+abstract interface class DesktopAuthenticator {
+  Future<HostedCredentials> signIn({String? deviceLabel});
+
+  Future<void> cancel();
+}
+
 final class DesktopAuthException implements Exception {
   const DesktopAuthException(this.message);
   final String message;
@@ -16,7 +22,7 @@ final class DesktopAuthException implements Exception {
   String toString() => message;
 }
 
-final class DesktopAuthService {
+final class DesktopAuthService implements DesktopAuthenticator {
   DesktopAuthService({
     required this.client,
     required this.launchBrowser,
@@ -28,6 +34,7 @@ final class DesktopAuthService {
   final Duration timeout;
   HttpServer? _activeServer;
 
+  @override
   Future<HostedCredentials> signIn({String? deviceLabel}) async {
     if (_activeServer != null) {
       throw const DesktopAuthException('A sign-in is already in progress.');
@@ -91,6 +98,7 @@ final class DesktopAuthService {
     }
   }
 
+  @override
   Future<void> cancel() async {
     final server = _activeServer;
     _activeServer = null;
