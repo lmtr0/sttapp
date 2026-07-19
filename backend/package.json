@@ -1,0 +1,15 @@
+{
+  "name": "sttapp-cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cloudflare:check": "wrangler deploy --dry-run --config wrangler.jsonc --outdir .wrangler/dry-run"
+  },
+  "dependencies": {
+    "jose": "6.2.3",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "wrangler": "4.112.0"
+  }
+}

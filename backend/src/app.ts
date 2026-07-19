@@ -13,7 +13,7 @@ import { receiveWebhook } from "./webhooks.ts";
 
 export function createApplication(
   deps: AppDependencies,
-): (request: Request, info?: Deno.ServeHandlerInfo) => Promise<Response> {
+): (request: Request, info?: RequestContext) => Promise<Response> {
   return async (request, info) => {
     const started = performance.now();
     const requestId = safeRequestId(request.headers.get("x-request-id"));
@@ -70,6 +70,10 @@ export function createApplication(
       headers,
     });
   };
+}
+
+export interface RequestContext {
+  peerIp?: string;
 }
 
 async function route(
@@ -516,11 +520,10 @@ function actionFor(state: string): string {
 }
 function remoteIp(
   request: Request,
-  info: Deno.ServeHandlerInfo | undefined,
+  info: RequestContext | undefined,
   deps: AppDependencies,
 ): string {
-  const address = info?.remoteAddr as Deno.NetAddr | undefined;
-  const peer = address?.hostname || "unknown";
+  const peer = info?.peerIp || "unknown";
   if (deps.config.trustedProxyAddresses.includes(peer)) {
     const forwarded = request.headers.get("x-forwarded-for")?.split(",", 1)[0]
       .trim();

@@ -69,6 +69,39 @@ Production requires a selected host/database/job runner/secret manager, TLS,
 backups with a restore drill, controlled migrations, monitoring/alerts, and the
 commercial/legal gates in `Tasks.md`.
 
+### Cloudflare Workers deployment
+
+`.github/workflows/deploy-cloudflare.yml` verifies the backend, applies the
+production PostgreSQL migration, bundles the module Worker, uploads its runtime
+bindings, and deploys `api.sttapp.app`. A one-minute Cron Trigger runs the same
+leased outbox, webhook, retention, and reservation-recovery jobs as
+`deno task jobs`. Database traffic uses a Cloudflare Hyperdrive binding and the
+Worker enables `nodejs_compat_v2` for Postgres.js.
+
+Create a protected GitHub `production` environment with these secrets:
+
+- `CLOUDFLARE_API_TOKEN` scoped to Workers Scripts, Workers Routes, and
+  Hyperdrive configuration access for the production account
+- `CLOUDFLARE_ACCOUNT_ID`
+- `PRODUCTION_DATABASE_URL` for the migration runner only
+- `INTERNAL_READINESS_TOKEN`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
+  `DODO_API_KEY`, `DODO_WEBHOOK_SECRET`, `GROQ_API_KEY`,
+  `ACCESS_TOKEN_PRIVATE_JWK`, and `REFRESH_TOKEN_PEPPER`
+
+Add these production environment variables:
+
+- `CLOUDFLARE_HYPERDRIVE_ID`
+- `CLERK_ISSUER`, `CLERK_JWKS_URL`, `CLERK_SIGN_IN_URL`, and
+  `CLERK_AUTHORIZED_PARTIES`
+- `DODO_PRODUCT_ID`, `DODO_METER_TURBO_ID`, and `DODO_METER_LARGE_ID`
+- `ACCESS_TOKEN_PUBLIC_JWKS` and `ACCESS_TOKEN_KEY_ID`
+
+The workflow injects the Hyperdrive ID into the Wrangler configuration only in
+the ephemeral runner workspace; resource IDs and credentials are never
+committed. The Hyperdrive configuration must point at the same database as
+`PRODUCTION_DATABASE_URL`. Configure the `api.sttapp.app` DNS zone in the
+Cloudflare account before the first deploy.
+
 Run workers at least once per minute. Only one instance processes a worker group
 at a time through `job_leases`; outbox rows recover expired leases. Deploy API
 and worker code from the same revision. Run migrations before shifting traffic;

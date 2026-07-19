@@ -30,6 +30,13 @@
       "jsr:@std/assert@1.0.19",
       "npm:jose@6.2.3",
       "npm:postgres@3.4.9"
-    ]
+    ],
+    "packageJson": {
+      "dependencies": [
+        "npm:jose@6.2.3",
+        "npm:postgres@3.4.9",
+        "npm:wrangler@4.112.0"
+      ]
+    }
   }
 }

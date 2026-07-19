@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "sttapp-api",
+  "main": "worker.ts",
+  "compatibility_date": "2026-07-19",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "api.sttapp.app",
+      "custom_domain": true
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "__CLOUDFLARE_HYPERDRIVE_ID__"
+    }
+  ],
+  "vars": {
+    "STTAPP_ENV": "production",
+    "PROVIDER_ENV": "live",
+    "PUBLIC_BASE_URL": "https://api.sttapp.app",
+    "DATABASE_POOL_SIZE": "5",
+    "DATABASE_TLS": "true",
+    "CORS_ORIGINS": "",
+    "TRUSTED_PROXY_ADDRESSES": "",
+    "DODO_API_BASE_URL": "https://live.dodopayments.com",
+    "DODO_PORTAL_HOSTS": "checkout.dodopayments.com",
+    "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+    "ACCESS_TOKEN_SECONDS": "600",
+    "REFRESH_INACTIVITY_SECONDS": "2592000",
+    "REFRESH_ABSOLUTE_SECONDS": "7776000",
+    "MAX_BODY_BYTES": "26214400",
+    "MAX_AUDIO_SECONDS": "7200",
+    "MAX_CONCURRENT_PER_ACCOUNT": "2",
+    "MAX_CYCLE_RETAIL_MICROS": "5000000",
+    "REQUEST_TIMEOUT_MS": "120000",
+    "WEBHOOK_TOLERANCE_SECONDS": "300",
+    "RETENTION_DAYS": "90"
+  }
+}

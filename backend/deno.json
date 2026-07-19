@@ -17,7 +17,7 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
-    "check": "deno check main.ts src/**/*.ts tests/**/*.ts",
+    "check": "deno check main.ts worker.ts src/**/*.ts tests/**/*.ts",
     "test": "deno test --allow-env --allow-read tests/*.ts",
     "test:integration": "deno test --allow-env --allow-net --allow-read tests/integration",
     "test:all": "deno task test && deno task test:integration",

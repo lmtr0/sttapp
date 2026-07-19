@@ -4,6 +4,7 @@ import {
   runOutbox,
   runWebhooks,
 } from "../src/jobs/processors.ts";
+import { runJobsOnce } from "../src/jobs/run.ts";
 import { redact } from "../src/observability.ts";
 import { testDependencies } from "./helpers.ts";
 
@@ -95,6 +96,23 @@ Deno.test("outbox worker leases and delivers exactly one logical event", async (
   assertEquals(await runOutbox(deps), 1);
   assertEquals(await runOutbox(deps), 0);
   assertEquals(deps.dodo.usage.length, 1);
+});
+
+Deno.test("scheduled jobs release their lease and skip a competing run", async () => {
+  const deps = await testDependencies();
+  const first = await runJobsOnce(deps);
+  assertEquals(first.skipped, false);
+  assertEquals(first.usageEvents, 0);
+  assertEquals(
+    await deps.repository.acquireJobLease(
+      "default-workers",
+      "competing-worker",
+      deps.now(),
+      300,
+    ),
+    true,
+  );
+  assertEquals((await runJobsOnce(deps)).skipped, true);
 });
 
 Deno.test("live reservations enforce concurrency and spend before provider work", async () => {

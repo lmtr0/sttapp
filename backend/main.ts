@@ -10,5 +10,13 @@ if (import.meta.main) {
   const dependencies = await createProductionDependencies(config);
   const handler = createApplication(dependencies);
   console.log(JSON.stringify({ event: "server.started", port: config.port }));
-  Deno.serve({ port: config.port }, handler);
+  Deno.serve(
+    { port: config.port },
+    (request, info) =>
+      handler(request, {
+        peerIp: "hostname" in info.remoteAddr
+          ? info.remoteAddr.hostname
+          : undefined,
+      }),
+  );
 }

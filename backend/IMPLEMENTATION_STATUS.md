@@ -62,6 +62,11 @@ proof.
 - Safe structured logs exist, but no complete metrics/tracing backend,
   dashboards, budgets, or test-fired alert routes exist. Distributed request
   rate limiting and global/provider spend circuit breakers also remain.
+- The Cloudflare module-Worker adapter, Hyperdrive/Wrangler configuration,
+  one-minute scheduled jobs, and production GitHub deployment workflow bundle
+  locally. The real Cloudflare account, Hyperdrive/database resource, custom
+  domain, protected environment approvals, and first production deployment still
+  require external configuration and evidence.
 
 ## External/uncompleted gates
 
